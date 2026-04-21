@@ -192,8 +192,7 @@ show_banner() {
 ║   ██████╔╝██║  ██║   ██║   ██║  ██║██║ ╚████║            ║
 ║   ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═══╝            ║
 ║                                                          ║
-║              TARGET SETUP v1.0 - BY BRYNNNN12           ║
-║         Production-Ready | Fully Modularized             ║
+║         TARGET SETUP v1.0 - BY BRYNNNN12                 ║
 ╚══════════════════════════════════════════════════════════╝
 BANNER
     printf '%b' "${NC}"
