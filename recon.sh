@@ -66,10 +66,10 @@ readonly WHITE='\033[1;37m'
 readonly GRAY='\033[0;90m'
 readonly NC='\033[0m'
 
-# Validation patterns (improved)
-readonly DOMAIN_REGEX='^(?!-)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$'
+# Validation patterns (Bash ERE compatible - no lookahead/lookbehind)
+# Ensures labels don't start/end with hyphen and have 1-63 chars
+readonly DOMAIN_REGEX='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*\.[a-z]{2,}$'
 readonly NUMERIC_REGEX='^[0-9]+$'
-readonly RATE_REGEX='^[0-9]+(/[smh])?$'
 
 # ============================================
 # GLOBAL VARIABLES (from .env)
