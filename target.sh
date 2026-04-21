@@ -180,7 +180,7 @@ validate_target_dir() {
     return 0
 }
 
-show_banner() {
+print_banner() {
     printf '%b' "${RED}"
     cat << 'BANNER'
 ╔══════════════════════════════════════════════════════════╗
@@ -196,12 +196,10 @@ show_banner() {
 ╚══════════════════════════════════════════════════════════╝
 BANNER
     printf '%b' "${NC}"
-    printf '%bDate: %s%b\n' "${CYAN}" "$(date)" "${NC}"
-    printf '\n'
 }
 
-show_help() {
-    show_banner
+print_help() {
+    printf '\n'
     cat << 'HELP'
 PEMAKAIAN:
   target.sh [PERINTAH] [OPSI]
@@ -225,6 +223,11 @@ CONTOH:
   target.sh activate example.com
 
 HELP
+}
+
+show_help() {
+    print_banner
+    print_help
 }
 
 show_version() {
@@ -346,7 +349,7 @@ create_notes_file() {
 
 📝 IMPORTANT
 ═══════════════════════════════════════════════════════════════════
-  ✏  Document findings
+  ✏️  Document findings
   📸  Save screenshots
   🔐  Never commit API keys
   💾  Backup results
@@ -529,49 +532,60 @@ list_targets() {
 # MAIN PROGRAM
 # ============================================
 
-parse_arguments() {
-    local args=()
+main() {
+    # Parse global options directly without subshell
+    local -a remaining_args=()
+    
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -f|--force)  FORCE_MODE=true; shift ;;
-            -s|--silent) SILENT_MODE=true; shift ;;
-            -h|--help)   show_help; exit 0 ;;
-            -v|--version) show_version; exit 0 ;;
-            -*)          error_msg "Unknown option: $1" ;;
-            *)           args+=("$1"); shift ;;
+            -f|--force)  
+                FORCE_MODE=true
+                shift
+                ;;
+            -s|--silent) 
+                SILENT_MODE=true
+                shift
+                ;;
+            -h|--help)   
+                print_banner
+                print_help
+                exit 0
+                ;;
+            -v|--version) 
+                show_version
+                exit 0
+                ;;
+            -*)          
+                error_msg "Unknown option: $1"
+                ;;
+            *)           
+                remaining_args+=("$1")
+                shift
+                ;;
         esac
     done
-    # Return arguments as array elements, not as a string
-    printf '%s\n' "${args[@]}"
-}
-
-main() {
-    # Parse global options first - handle array properly
-    local -a remaining=()
-    while IFS= read -r arg; do
-        remaining+=("$arg")
-    done < <(parse_arguments "$@")
-    
-    set -- "${remaining[@]}"
 
     setup_logging
 
     # Require at least one command
-    if [[ $# -eq 0 ]]; then
-        show_banner
-        printf '%bUsage: %s <command> [options]%b\n' "${YELLOW}" "$SCRIPT_NAME" "${NC}"
+    if [[ ${#remaining_args[@]} -eq 0 ]]; then
+        print_banner
+        printf '%bDate: %s%b\n' "${CYAN}" "$(date)" "${NC}"
+        printf '\n%bUsage: %s <command> [options]%b\n' "${YELLOW}" "$SCRIPT_NAME" "${NC}"
         printf '\nRun with --help for more information\n'
         exit 1
     fi
-    local command="$1"
-    shift || true
+
+    local command="${remaining_args[0]}"
+    local -a cmd_args=("${remaining_args[@]:1}")
 
     case "$command" in
         new)
-            [[ -z "${1:-}" ]] && error_msg "Domain required"
-            show_banner
+            [[ ${#cmd_args[@]} -eq 0 ]] && error_msg "Domain required"
+            print_banner
+            printf '\n'
 
-            local target="${1:-}"
+            local target="${cmd_args[0]}"
             target=$(sanitize_domain "$target")
             validate_domain "$target" || error_msg "Invalid domain: $target"
 
@@ -626,23 +640,25 @@ main() {
             ;;
 
         list)
-            show_banner
+            print_banner
+            printf '%bDate: %s%b\n' "${CYAN}" "$(date)" "${NC}"
+            printf '\n'
             list_targets
             ;;
 
         activate)
-            [[ -z "${1:-}" ]] && error_msg "Target name required"
-            activate_target "$1"
+            [[ ${#cmd_args[@]} -eq 0 ]] && error_msg "Target name required for 'activate' command"
+            activate_target "${cmd_args[0]}"
             ;;
 
         deactivate)
-            [[ -z "${1:-}" ]] && error_msg "Target name required"
-            deactivate_target "$1"
+            [[ ${#cmd_args[@]} -eq 0 ]] && error_msg "Target name required for 'deactivate' command"
+            deactivate_target "${cmd_args[0]}"
             ;;
 
         delete)
-            [[ -z "${1:-}" ]] && error_msg "Target name required"
-            delete_target "$1"
+            [[ ${#cmd_args[@]} -eq 0 ]] && error_msg "Target name required for 'delete' command"
+            delete_target "${cmd_args[0]}"
             ;;
 
         *)
@@ -652,4 +668,3 @@ main() {
 }
 
 main "$@"
-

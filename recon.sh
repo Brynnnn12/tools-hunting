@@ -226,7 +226,7 @@ show_help() {
     printf '  passive            Hanya enumerasi pasif\n'
     printf '  full               Enumerasi penuh termasuk brute force\n'
 
-
+}
 show_version() {
     printf '%s v%s\n' "$SCRIPT_NAME" "$TOOL_VERSION"
 }
