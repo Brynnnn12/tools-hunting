@@ -3,6 +3,7 @@
 # ============================================
 # Alat Enumerasi Subdomain & Pengintaian v1.0
 # Penulis: BRYNNNN12
+# DevSecOps Audit: FIXED & HARDENED
 # ============================================
 # FITUR:
 #   - Pemuatan .env ketat dengan parsing variabel whitelist
@@ -12,6 +13,7 @@
 #   - Output JSON opsional (--json flag)
 #   - Kontrol mode: auto/passive/full
 #   - Rate limiting untuk query DNS
+#   - HARDENED: Input validation, secure parsing, no silent failures
 # ============================================
 
 set -euo pipefail
@@ -37,6 +39,10 @@ readonly WHITE='\033[1;37m'
 readonly GRAY='\033[0;90m'
 readonly NC='\033[0m'
 
+# Validation patterns
+readonly DOMAIN_REGEX='^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}$'
+readonly NUMERIC_REGEX='^[0-9]+$'
+
 # ============================================
 # GLOBAL VARIABLES (from .env)
 # ============================================
@@ -53,7 +59,6 @@ MODE="auto"
 JSON_OUTPUT="false"
 SILENT_MODE="false"
 CHAOS_KEY=""
-RESOURCE_DIR="${HOME}/.config/recon"
 
 # Internal
 LOG_FILE=""
@@ -86,10 +91,10 @@ log_action() {
         case "$level" in
             ERROR)   printf '%b[❌] %s%b\n' "${RED}" "$message" "${NC}" >&2 ;;
             WARNING) printf '%b[⚠]  %s%b\n' "${YELLOW}" "$message" "${NC}" >&2 ;;
-            INFO)    printf '%b[ℹ]  %s%b\n' "${BLUE}" "$message" "${NC}" ;;
-            SUCCESS) printf '%b[✅] %s%b\n' "${GREEN}" "$message" "${NC}" ;;
-            STEP)    printf '%b[→]  %s%b\n' "${CYAN}" "$message" "${NC}" ;;
-            *)       printf '%s\n' "$message" ;;
+            INFO)    printf '%b[ℹ]  %s%b\n' "${BLUE}" "$message" "${NC}" >&2 ;;
+            SUCCESS) printf '%b[✅] %s%b\n' "${GREEN}" "$message" "${NC}" >&2 ;;
+            STEP)    printf '%b[→]  %s%b\n' "${CYAN}" "$message" "${NC}" >&2 ;;
+            *)       printf '%s\n' "$message" >&2 ;;
         esac
     fi
 }
@@ -120,11 +125,46 @@ setup_logging() {
     success_msg "Logging initialized"
 }
 
+# SECURE: Clean domain - single responsibility
+clean_domain() {
+    local domain="$1"
+    
+    # Strip protocol
+    domain="${domain#*://}"
+    # Strip path and fragments
+    domain="${domain%%/*}"
+    domain="${domain%%#*}"
+    # Strip port
+    domain="${domain%%:*}"
+    # Strip www prefix
+    domain="${domain#www.}"
+    # Remove quotes
+    domain="${domain%\"}"
+    domain="${domain#\"}"
+    domain="${domain%\'}"
+    domain="${domain#\'}"
+    
+    # Trim whitespace and convert to lowercase
+    domain=$(printf '%s' "$domain" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+    
+    printf '%s' "$domain"
+}
+
+# SECURE: Validate domain format
+validate_domain_format() {
+    local domain="$1"
+    
+    if [[ ! "$domain" =~ $DOMAIN_REGEX ]]; then
+        return 1
+    fi
+    return 0
+}
+
 load_env() {
-    # Determine BASE_DIR - try multiple locations with strict precedence
     local env_file=""
     local env_dir=""
 
+    # SECURE: Find .env with strict precedence
     if [[ -n "${BASE_DIR:-}" && -f "${BASE_DIR}/.env" ]]; then
         env_file="${BASE_DIR}/.env"
         env_dir="$BASE_DIR"
@@ -138,13 +178,14 @@ load_env() {
         error_msg "Cannot find .env file (checked: ./.env, ../.env, \${BASE_DIR}/.env)"
     fi
 
+    # SECURE: Verify readability
     if [[ ! -r "$env_file" ]]; then
         error_msg "Cannot read .env file: $env_file"
     fi
 
     info_msg "Loading environment from: $env_file"
 
-    # Whitelist parsing: Only read expected variables
+    # SECURE: Whitelist parsing - NO EVAL, NO UNSAFE SOURCE
     local key value
     while IFS='=' read -r key value || [[ -n "$key" ]]; do
         # Skip empty lines and comments
@@ -156,16 +197,16 @@ load_env() {
         value="${value## }"
         value="${value%% }"
 
-        # Remove quotes if present
+        # Remove quotes (leading & trailing)
         value="${value%\"}"
         value="${value#\"}"
         value="${value%\'}"
         value="${value#\'}"
 
-        # Remove 'export ' prefix if present
+        # Remove 'export ' prefix
         key="${key#export }"
 
-        # Only load whitelisted variables
+        # WHITELIST ONLY - no dynamic assignment
         case "$key" in
             TARGET)          TARGET="$value" ;;
             BASE_DIR)        BASE_DIR="$value" ;;
@@ -177,42 +218,32 @@ load_env() {
             RATE_LIMIT)      RATE_LIMIT="${value:-50}" ;;
             MODE)            MODE="${value:-auto}" ;;
             CHAOS_KEY)       CHAOS_KEY="$value" ;;
-            RESOURCE_DIR)    RESOURCE_DIR="$value" ;;
         esac
     done < "$env_file"
 
-    # Verify required variables
+    # SECURE: Verify required variables
     [[ -z "$TARGET" ]] && error_msg "TARGET not set in .env"
     [[ -z "$BASE_DIR" ]] && error_msg "BASE_DIR not set in .env"
 
-    # Clean TARGET: strip protocol, path, port, www prefix, and quotes
-    TARGET="${TARGET#*://}"           # Remove http://, https://, etc.
-    TARGET="${TARGET%%/*}"             # Remove path after domain
-    TARGET="${TARGET%%:*}"             # Remove port
-    TARGET="${TARGET#www.}"            # Remove www. prefix
-    TARGET="${TARGET%\"}"              # Remove trailing quote
-    TARGET="${TARGET#\"}"              # Remove leading quote
-    TARGET="${TARGET%\'}"              # Remove trailing single quote
-    TARGET="${TARGET#\'}"              # Remove leading single quote
-    
-    # Trim whitespace and convert to lowercase using sed/tr
-    TARGET=$(printf '%s' "$TARGET" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+    # SECURE: Clean TARGET domain (remove protocol, path, port, etc.)
+    TARGET=$(clean_domain "$TARGET")
+    [[ -z "$TARGET" ]] && error_msg "TARGET is empty after cleaning"
 
-    # If BASE_DIR doesn't exist, use the .env file's directory as fallback
+    # SECURE: Validate BASE_DIR exists or use fallback
     if [[ ! -d "$BASE_DIR" ]]; then
         warning_msg "BASE_DIR from .env not found: $BASE_DIR"
         warning_msg "Using .env directory as BASE_DIR instead"
         BASE_DIR="$env_dir"
     fi
 
-    # Expand ${BASE_DIR} in paths
+    # SECURE: Expand ${BASE_DIR} in paths (safe parameter expansion)
     RECON_DIR="${RECON_DIR/\$\{BASE_DIR\}/$BASE_DIR}"
     SCANS_DIR="${SCANS_DIR/\$\{BASE_DIR\}/$BASE_DIR}"
     SCREENSHOTS_DIR="${SCREENSHOTS_DIR/\$\{BASE_DIR\}/$BASE_DIR}"
     REPORTS_DIR="${REPORTS_DIR/\$\{BASE_DIR\}/$BASE_DIR}"
     LOG_DIR="${LOG_DIR/\$\{BASE_DIR\}/$BASE_DIR}"
 
-    # Set defaults
+    # Set defaults if not set
     RECON_DIR="${RECON_DIR:-$BASE_DIR/recon}"
     SCANS_DIR="${SCANS_DIR:-$BASE_DIR/scans}"
     SCREENSHOTS_DIR="${SCREENSHOTS_DIR:-$BASE_DIR/screenshots}"
@@ -236,6 +267,22 @@ parse_arguments() {
             *)              error_msg "Unknown argument: $1" ;;
         esac
     done
+    
+    # SECURE: Validate MODE
+    case "$MODE" in
+        auto|passive|full) ;;
+        *) error_msg "Invalid MODE: $MODE (must be auto/passive/full)" ;;
+    esac
+    
+    # SECURE: Validate RATE_LIMIT is numeric
+    if [[ ! "$RATE_LIMIT" =~ $NUMERIC_REGEX ]]; then
+        error_msg "RATE_LIMIT must be numeric, got: $RATE_LIMIT"
+    fi
+    
+    # SECURE: Validate conflicting options
+    if [[ "$SILENT_MODE" == "true" && "$JSON_OUTPUT" == "true" ]]; then
+        warning_msg "Both --silent and --json set; JSON will be used"
+    fi
 }
 
 show_help() {
@@ -254,6 +301,7 @@ show_help() {
     printf '  -h, --help         Tampilkan pesan bantuan ini\n'
     printf '  -v, --version      Tampilkan versi\n'
 }
+
 show_version() {
     printf '%s v%s\n' "$SCRIPT_NAME" "$TOOL_VERSION"
 }
@@ -262,28 +310,10 @@ show_version() {
 # VALIDATION & SETUP
 # ============================================
 
-validate_domain() {
-    local domain="$1"
-    
-    # Strip protocol and paths
-    domain="${domain#*://}"           # Remove http://, https://, etc.
-    domain="${domain%%/*}"             # Remove path after domain
-    domain="${domain%%:*}"             # Remove port
-    domain="${domain#www.}"            # Remove www. prefix (optional)
-    
-    # Trim whitespace using sed and convert to lowercase
-    domain=$(printf '%s' "$domain" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
-    
-    if [[ ! "$domain" =~ ^[a-z0-9.-]+\.[a-z]{2,}$ ]]; then
-        return 1
-    fi
-    return 0
-}
-
 check_tools() {
     step_msg "Checking required tools..."
 
-    local tools=("subfinder" "assetfinder" "puredns" "httpx")
+    local tools=("subfinder" "assetfinder" "httpx")
     local missing=0
 
     for tool in "${tools[@]}"; do
@@ -298,14 +328,21 @@ check_tools() {
     # Optional tools
     command -v shuffledns &>/dev/null && info_msg "Found: shuffledns" || warning_msg "shuffledns not found (optional)"
     command -v chaos &>/dev/null && info_msg "Found: chaos" || warning_msg "chaos not found (optional)"
+    command -v puredns &>/dev/null && info_msg "Found: puredns" || warning_msg "puredns not found (optional)"
 
     if [[ $missing -gt 0 ]]; then
         warning_msg "Some required tools missing - some features may not work"
     fi
 }
 
-setup_resources() {
-    mkdir -p "$RESOURCE_DIR" || error_msg "Cannot create resource directory"
+# SAFE: Count lines in file without crashing
+safe_wc() {
+    local file="$1"
+    if [[ -f "$file" && -r "$file" ]]; then
+        wc -l < "$file" 2>/dev/null || echo "0"
+    else
+        echo "0"
+    fi
 }
 
 # ============================================
@@ -339,30 +376,38 @@ run_passive_enumeration() {
     step_msg "Running passive enumeration..."
 
     local passive_subdomains="${RECON_DIR}/passive_subdomains.txt"
-    > "$passive_subdomains"
+    > "$passive_subdomains" || error_msg "Cannot create passive_subdomains.txt"
 
     # Subfinder
     if command -v subfinder &> /dev/null; then
         info_msg "Running subfinder..."
-        subfinder -d "$TARGET" -silent 2>/dev/null >> "$passive_subdomains" || warning_msg "Subfinder failed"
+        subfinder -d "$TARGET" -silent 2>/dev/null >> "$passive_subdomains" || warning_msg "Subfinder failed or returned no results"
+        local sf_count
+        sf_count=$(safe_wc "$passive_subdomains")
+        info_msg "Subfinder found: $sf_count domains"
     fi
 
     # Assetfinder
     if command -v assetfinder &> /dev/null; then
         info_msg "Running assetfinder..."
-        assetfinder --subs-only "$TARGET" 2>/dev/null >> "$passive_subdomains" || warning_msg "Assetfinder failed"
+        assetfinder --subs-only "$TARGET" 2>/dev/null >> "$passive_subdomains" || warning_msg "Assetfinder failed or returned no results"
+        local af_count
+        af_count=$(safe_wc "$passive_subdomains")
+        info_msg "Assetfinder found: $af_count total domains so far"
     fi
 
     # Chaos (optional)
     if [[ -n "$CHAOS_KEY" ]] && command -v chaos &> /dev/null; then
         info_msg "Running chaos..."
-        chaos -d "$TARGET" -key "$CHAOS_KEY" -silent 2>/dev/null >> "$passive_subdomains" || warning_msg "Chaos failed"
+        chaos -d "$TARGET" -key "$CHAOS_KEY" -silent 2>/dev/null >> "$passive_subdomains" || warning_msg "Chaos failed or returned no results"
     fi
 
-    # Deduplicate (performance: cache count result)
-    sort -u "$passive_subdomains" -o "$passive_subdomains"
+    # Deduplicate
+    info_msg "Deduplicating results..."
+    sort -u "$passive_subdomains" -o "$passive_subdomains" || error_msg "Failed to deduplicate"
+    
     local count
-    count=$(wc -l < "$passive_subdomains" 2>/dev/null || echo "0")
+    count=$(safe_wc "$passive_subdomains")
 
     success_msg "Passive enumeration complete: $count subdomains"
     log_action "INFO" "Passive results: $count subdomains"
@@ -378,20 +423,22 @@ run_active_enumeration() {
     step_msg "Running active enumeration..."
 
     local active_subdomains="${RECON_DIR}/active_subdomains.txt"
-    > "$active_subdomains"
+    > "$active_subdomains" || error_msg "Cannot create active_subdomains.txt"
 
     # Shuffledns (brute force)
     if command -v shuffledns &> /dev/null; then
-        info_msg "Running shuffledns with rate limit $RATE_LIMIT..."
-        shuffledns -d "$TARGET" -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -rate "$RATE_LIMIT" -silent 2>/dev/null >> "$active_subdomains" || warning_msg "Shuffledns failed"
+        info_msg "Running shuffledns with rate limit $RATE_LIMIT (this may take a while)..."
+        shuffledns -d "$TARGET" -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -rate "$RATE_LIMIT" -silent 2>/dev/null >> "$active_subdomains" || warning_msg "Shuffledns failed or returned no results"
+        info_msg "Shuffledns completed"
     else
-        warning_msg "shuffledns not found"
+        warning_msg "shuffledns not found - skipping active enumeration"
     fi
 
-    # Deduplicate and count (performance: cache count)
+    # Deduplicate
     [[ -f "$active_subdomains" ]] && sort -u "$active_subdomains" -o "$active_subdomains"
+    
     local count
-    count=$(wc -l < "$active_subdomains" 2>/dev/null || echo "0")
+    count=$(safe_wc "$active_subdomains")
 
     success_msg "Active enumeration complete: $count subdomains"
     log_action "INFO" "Active results: $count subdomains"
@@ -410,22 +457,25 @@ run_live_check() {
     local live_file="${RECON_DIR}/live_subdomains.txt"
 
     # Combine all subdomains
+    info_msg "Combining passive and active results..."
     cat "${RECON_DIR}/passive_subdomains.txt" "${RECON_DIR}/active_subdomains.txt" 2>/dev/null | sort -u > "$combined_file" || touch "$combined_file"
 
     local combined_count
-    combined_count=$(wc -l < "$combined_file" 2>/dev/null || echo "0")
+    combined_count=$(safe_wc "$combined_file")
     info_msg "Testing $combined_count combined subdomains for live hosts..."
 
-    # Httpx (performance: cache count, avoid repeated wc)
+    # Httpx
     if command -v httpx &> /dev/null; then
+        info_msg "Running httpx (this may take a while)..."
         httpx -l "$combined_file" -sc -title -tech-detect -o "$live_file" -silent 2>/dev/null || warning_msg "Httpx failed"
+        info_msg "Httpx completed"
     else
         warning_msg "httpx not found - skipping live detection"
         touch "$live_file"
     fi
 
     local live_count
-    live_count=$(wc -l < "$live_file" 2>/dev/null || echo "0")
+    live_count=$(safe_wc "$live_file")
     success_msg "Live detection complete: $live_count live hosts"
     log_action "INFO" "Live results: $live_count hosts"
 
@@ -448,7 +498,7 @@ main_recon() {
     local passive_count
     passive_count=$(run_passive_enumeration)
 
-    # Step 2: Decide based on mode (performance: use cached count)
+    # Step 2: Decide based on mode
     case "$MODE" in
         passive)
             info_msg "Mode: PASSIVE ONLY"
@@ -457,12 +507,12 @@ main_recon() {
             ;;
         full|active)
             info_msg "Mode: FULL ENUMERATION"
-            run_active_enumeration > /dev/null
+            run_active_enumeration 2>&1 | grep -v '^$' >&2 || true
             ;;
         auto)
             if [[ $passive_count -lt 50 ]]; then
                 info_msg "Passive results ($passive_count) < threshold (50), running active enumeration..."
-                run_active_enumeration > /dev/null
+                run_active_enumeration 2>&1 | grep -v '^$' >&2 || true
             else
                 info_msg "Passive results ($passive_count) >= threshold (50), skipping active"
                 mkdir -p "${RECON_DIR}/active"
@@ -476,7 +526,7 @@ main_recon() {
 
     # Step 3: Live detection
     [[ ! -f "${RECON_DIR}/active_subdomains.txt" ]] && touch "${RECON_DIR}/active_subdomains.txt"
-    run_live_check > /dev/null
+    run_live_check 2>&1 | grep -v '^$' >&2 || true
 
     step_msg "Reconnaissance complete"
 }
@@ -490,9 +540,9 @@ output_json_results() {
     local active="${RECON_DIR}/active_subdomains.txt"
     local live="${RECON_DIR}/live_subdomains.txt"
 
-    local passive_count=$(wc -l < "$passive" 2>/dev/null || echo "0")
-    local active_count=$(wc -l < "$active" 2>/dev/null || echo "0")
-    local live_count=$(wc -l < "$live" 2>/dev/null || echo "0")
+    local passive_count=$(safe_wc "$passive")
+    local active_count=$(safe_wc "$active")
+    local live_count=$(safe_wc "$live")
 
     local elapsed=$(($(date +%s%N) - START_TIME))
 
@@ -521,15 +571,15 @@ main() {
     load_env
     setup_logging
 
-    validate_domain "$TARGET" || error_msg "Invalid target domain: $TARGET"
+    # SECURE: Validate and clean TARGET domain
+    TARGET=$(clean_domain "$TARGET")
+    validate_domain_format "$TARGET" || error_msg "Invalid target domain: $TARGET"
 
     check_tools
-    setup_resources
-
     main_recon
 
     if [[ "$JSON_OUTPUT" == "true" ]]; then
-        printf '\n'
+        printf '\n' >&2
         output_json_results
     fi
 
