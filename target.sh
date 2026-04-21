@@ -1,13 +1,12 @@
 #!/bin/bash
 
 # ============================================
-# Bug Bounty Target Setup Script v2.0
+# Bug Bounty Target Setup Script v1.0
 # Author: Bryan | BRYNNNN12
-# Version: 2.0 (Production-Ready)
-# Fully Modularized | Security-Focused | Enterprise-Grade
 # ============================================
 
 set -euo pipefail
+trap 'handle_trap_error "Error on line $LINENO"' ERR
 
 # ============================================
 # GLOBAL CONSTANTS
@@ -15,9 +14,10 @@ set -euo pipefail
 
 readonly SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly TOOL_VERSION="1.0"
 readonly DEFAULT_AUTHOR="Bryan"
-readonly DEFAULT_TOOL_VERSION="2.0"
 readonly DEFAULT_TARGETS_DIR="${HOME}/bugbounty/targets"
+readonly MIN_TLD_LENGTH=2
 
 # Color codes
 readonly RED='\033[0;31m'
@@ -35,35 +35,30 @@ readonly NC='\033[0m'
 # ============================================
 
 AUTHOR="${AUTHOR:-$DEFAULT_AUTHOR}"
-TOOL_VERSION="${TOOL_VERSION:-$DEFAULT_TOOL_VERSION}"
 TARGETS_DIR="${TARGETS_DIR:-$DEFAULT_TARGETS_DIR}"
 LOG_FILE=""
 SILENT_MODE=false
+FORCE_MODE=false
 
 # ============================================
-# UTILITY FUNCTIONS
+# ERROR HANDLING
+# ============================================
+
+handle_trap_error() {
+    local line="$1"
+    local exit_code="${2:-$?}"
+    log_error "$line (exit code: $exit_code)"
+    exit "$exit_code"
+}
+
+# ============================================
+# LOGGING FUNCTIONS
 # ============================================
 
 get_timestamp() {
     date '+%Y-%m-%d %H:%M:%S'
 }
 
-# Initialize logging system
-setup_logging() {
-    if [[ ! -d "$TARGETS_DIR" ]]; then
-        mkdir -p "$TARGETS_DIR" || {
-            echo -e "${RED}[❌] ERROR: Cannot create TARGETS_DIR: $TARGETS_DIR${NC}" >&2
-            exit 1
-        }
-    fi
-
-    LOG_FILE="${TARGETS_DIR}/setup.log"
-    touch "$LOG_FILE" 2>/dev/null || {
-        echo -e "${YELLOW}[⚠] WARNING: Cannot create log file${NC}" >&2
-    }
-}
-
-# Log action to file and console
 log_action() {
     local level="$1"
     local message="$2"
@@ -71,43 +66,71 @@ log_action() {
     timestamp=$(get_timestamp)
 
     if [[ -n "$LOG_FILE" && -w "$LOG_FILE" ]]; then
-        echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
+        printf '[%s] [%s] %s\n' "$timestamp" "$level" "$message" >> "$LOG_FILE"
     fi
 
     if [[ "$SILENT_MODE" == "false" ]]; then
         case "$level" in
-            ERROR) echo -e "${RED}[❌] $message${NC}" >&2 ;;
-            WARNING) echo -e "${YELLOW}[⚠] $message${NC}" >&2 ;;
-            INFO) echo -e "${BLUE}[ℹ] $message${NC}" ;;
-            SUCCESS) echo -e "${GREEN}[✅] $message${NC}" ;;
-            *) echo -e "$message" ;;
+            ERROR)   printf '%b[❌] %s%b\n' "${RED}" "$message" "${NC}" >&2 ;;
+            WARNING) printf '%b[⚠]  %s%b\n' "${YELLOW}" "$message" "${NC}" >&2 ;;
+            INFO)    printf '%b[ℹ]  %s%b\n' "${BLUE}" "$message" "${NC}" ;;
+            SUCCESS) printf '%b[✅] %s%b\n' "${GREEN}" "$message" "${NC}" ;;
+            *)       printf '%s\n' "$message" ;;
         esac
     fi
 }
 
-# Convenience functions
-error_msg() { log_action "ERROR" "$1"; exit 1; }
+error_msg()   { log_action "ERROR" "$1"; exit 1; }
 warning_msg() { log_action "WARNING" "$1"; }
-info_msg() { log_action "INFO" "$1"; }
+info_msg()    { log_action "INFO" "$1"; }
 success_msg() { log_action "SUCCESS" "$1"; }
 
 # ============================================
-# DOMAIN VALIDATION
+# UTILITY FUNCTIONS
+# ============================================
+
+setup_logging() {
+    if [[ ! -d "$TARGETS_DIR" ]]; then
+        mkdir -p "$TARGETS_DIR" || error_msg "Cannot create TARGETS_DIR: $TARGETS_DIR"
+    fi
+
+    LOG_FILE="${TARGETS_DIR}/setup.log"
+    if ! touch "$LOG_FILE" 2>/dev/null; then
+        warning_msg "Cannot create log file: $LOG_FILE (continuing without logging)"
+        LOG_FILE=""
+    fi
+}
+
+# ============================================
+# VALIDATION FUNCTIONS
 # ============================================
 
 validate_domain() {
     local domain="$1"
 
-    if [[ ! "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+    # Check for empty or whitespace-only domain
+    if [[ -z "$domain" || "$domain" =~ ^[[:space:]]*$ ]]; then
         return 1
     fi
 
+    # Check regex: valid domain format
+    if ! [[ "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+        return 1
+    fi
+
+    # Must contain at least one dot
     if [[ "$domain" != *.* ]]; then
         return 1
     fi
 
+    # TLD must be at least 2 characters
     local tld="${domain##*.}"
-    if [[ ${#tld} -lt 2 ]]; then
+    if [[ ${#tld} -lt $MIN_TLD_LENGTH ]]; then
+        return 1
+    fi
+
+    # Check for double dots
+    if [[ "$domain" =~ \.\. ]]; then
         return 1
     fi
 
@@ -117,81 +140,101 @@ validate_domain() {
 sanitize_domain() {
     local domain="$1"
 
+    # Remove protocol
     domain="${domain#http://}"
     domain="${domain#https://}"
+
+    # Remove www prefix
     domain="${domain#www.}"
+
+    # Remove path
     domain="${domain%%/*}"
+
+    # Remove port
     domain="${domain%%:*}"
+
+    # Lowercase
     domain="${domain,,}"
 
     echo "$domain"
 }
 
-# ============================================
-# BANNER
-# ============================================
+validate_target_dir() {
+    local base_dir="$1"
 
-show_banner() {
-    echo -e "${RED}"
-    echo "╔══════════════════════════════════════════════════════════╗"
-    echo "║                                                          ║"
-    echo "║   ██████╗ ██████╗ ██╗   ██╗ █████╗ ███╗   ██╗            ║"
-    echo "║   ██╔══██╗██╔══██╗╚██╗ ██╔╝██╔══██╗████╗  ██║            ║"
-    echo "║   ██████╔╝██████╔╝ ╚████╔╝ ███████║██╔██╗ ██║            ║"
-    echo "║   ██╔══██╗██╔══██╗  ╚██╔╝  ██╔══██║██║╚██╗██║            ║"
-    echo "║   ██████╔╝██║  ██║   ██║   ██║  ██║██║ ╚████║            ║"
-    echo "║   ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═══╝            ║"
-    echo "║                                                          ║"
-    echo "║              TARGET SETUP v$TOOL_VERSION - BY $AUTHOR    ║"
-    echo "║         Production-Ready | Fully Modularized             ║"
-    echo "╚══════════════════════════════════════════════════════════╝"
-    echo -e "${NC}"
-    echo -e "${CYAN}📅 Date: $(date)${NC}"
-    echo ""
-}
-
-# ============================================
-# TARGET MANAGEMENT
-# ============================================
-
-list_targets() {
-    log_action "INFO" "Listing all targets"
-
-    echo -e "${CYAN}📋 Bug Bounty Targets List:${NC}"
-    echo -e "${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-
-    if [[ ! -d "$TARGETS_DIR" ]]; then
-        echo -e "  ${YELLOW}No targets yet${NC}"
-    else
-        local found=false
-        for target in "$TARGETS_DIR"/*/; do
-            if [[ -d "$target" ]]; then
-                found=true
-                local name
-                name=$(basename "$target")
-                local status_file="$target/status.txt"
-
-                if [[ -f "$status_file" ]]; then
-                    local status
-                    status=$(head -n 1 "$status_file" 2>/dev/null || echo "unknown")
-                    if [[ "$status" == "active" ]]; then
-                        echo -e "  ${GREEN}● ACTIVE${NC}   - $name"
-                    else
-                        echo -e "  ${GRAY}○ INACTIVE${NC} - $name"
-                    fi
-                else
-                    echo -e "  ${YELLOW}? UNKNOWN${NC}  - $name"
-                fi
-            fi
-        done
-
-        if [[ "$found" == false ]]; then
-            echo -e "  ${YELLOW}No targets yet${NC}"
-        fi
+    # Must not be empty
+    if [[ -z "$base_dir" ]]; then
+        error_msg "BASE_DIR cannot be empty"
     fi
 
-    echo -e "${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    # Must not be root
+    if [[ "$base_dir" == "/" ]]; then
+        error_msg "BASE_DIR cannot be root directory"
+    fi
+
+    # Must not be home (too broad)
+    if [[ "$base_dir" == "$HOME" ]]; then
+        error_msg "BASE_DIR cannot be home directory (too broad)"
+    fi
+
+    return 0
 }
+
+show_banner() {
+    printf '%b' "${RED}"
+    cat << 'BANNER'
+╔══════════════════════════════════════════════════════════╗
+║                                                          ║
+║   ██████╗ ██████╗ ██╗   ██╗ █████╗ ███╗   ██╗            ║
+║   ██╔══██╗██╔══██╗╚██╗ ██╔╝██╔══██╗████╗  ██║            ║
+║   ██████╔╝██████╔╝ ╚████╔╝ ███████║██╔██╗ ██║            ║
+║   ██╔══██╗██╔══██╗  ╚██╔╝  ██╔══██║██║╚██╗██║            ║
+║   ██████╔╝██║  ██║   ██║   ██║  ██║██║ ╚████║            ║
+║   ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═══╝            ║
+║                                                          ║
+║              TARGET SETUP v1.0 - BY BRYNNNN12           ║
+║         Production-Ready | Fully Modularized             ║
+╚══════════════════════════════════════════════════════════╝
+BANNER
+    printf '%b' "${NC}"
+    printf '%bDate: %s%b\n' "${CYAN}" "$(date)" "${NC}"
+    printf '\n'
+}
+
+show_help() {
+    show_banner
+    cat << 'HELP'
+PEMAKAIAN:
+  target.sh [PERINTAH] [OPSI]
+
+PERINTAH:
+  new <domain>           Membuat target baru
+  list                   Daftar semua target
+  activate <domain>      Aktifkan target
+  deactivate <domain>    Nonaktifkan target
+  delete <domain>        Hapus target (tidak dapat dikembalikan)
+
+OPSI:
+  -f, --force            Lewati prompt konfirmasi
+  -s, --silent           Mode senyap (tanpa output)
+  -h, --help             Tampilkan pesan bantuan ini
+  -v, --version          Tampilkan versi
+
+CONTOH:
+  target.sh new example.com
+  target.sh list
+  target.sh activate example.com
+
+HELP
+}
+
+show_version() {
+    printf 'target.sh v%s\n' "$TOOL_VERSION"
+}
+
+# ============================================
+# FILE OPERATIONS (Safe)
+# ============================================
 
 create_target_structure() {
     local target="$1"
@@ -199,11 +242,11 @@ create_target_structure() {
 
     info_msg "Creating directory structure..."
 
-    mkdir -p "$base_dir/recon"
-    mkdir -p "$base_dir/scans"
-    mkdir -p "$base_dir/screenshots"
-    mkdir -p "$base_dir/reports"
-    mkdir -p "$base_dir/logs"
+    mkdir -p "$base_dir/recon" \
+             "$base_dir/scans" \
+             "$base_dir/screenshots" \
+             "$base_dir/reports" \
+             "$base_dir/logs" || error_msg "Failed to create directories"
 
     success_msg "Directory structure created"
     log_action "INFO" "Created directory structure for $target"
@@ -213,55 +256,53 @@ create_env_file() {
     local target="$1"
     local base_dir="$2"
     local env_file="$base_dir/.env"
+    local temp_env
 
     info_msg "Creating .env file..."
 
-    cat > "$env_file" << EOF
+    # Create temp file first
+    temp_env=$(mktemp) || error_msg "Cannot create temporary file"
+    trap "rm -f '$temp_env'" RETURN
+
+    cat > "$temp_env" << 'ENVEOF'
 #!/bin/bash
 # ============================================
 # Environment Variables - Bug Bounty Target
-# Production-Ready Environment File v2.0
+# Production-Ready Environment File v1.0
+# DO NOT MODIFY CORE VARIABLES
 # ============================================
 
-# TARGET INFORMATION (REQUIRED - Do not modify)
-export TARGET="$target"
-export BASE_DIR="$base_dir"
+# CORE VARIABLES (REQUIRED - synchronized with recon.sh)
+export TARGET="TARGET_PLACEHOLDER"
+export BASE_DIR="BASEDIR_PLACEHOLDER"
 
-# STANDARD DIRECTORIES (Synchronized with recon.sh)
-export RECON_DIR="\${BASE_DIR}/recon"
-export SCANS_DIR="\${BASE_DIR}/scans"
-export SCREENSHOTS_DIR="\${BASE_DIR}/screenshots"
-export REPORTS_DIR="\${BASE_DIR}/reports"
-export LOG_DIR="\${BASE_DIR}/logs"
+# STANDARD DIRECTORIES (DO NOT MODIFY)
+export RECON_DIR="${BASE_DIR}/recon"
+export SCANS_DIR="${BASE_DIR}/scans"
+export SCREENSHOTS_DIR="${BASE_DIR}/screenshots"
+export REPORTS_DIR="${BASE_DIR}/reports"
+export LOG_DIR="${BASE_DIR}/logs"
 
-# RECON TOOL CONFIGURATIONS (Optional - Customize as needed)
+# RECON TOOL CONFIGURATIONS (Optional)
 export RATE_LIMIT=50
 export MODE="auto"
-export TOOL_VERSION="2.0"
+export TOOL_VERSION="1.0"
 
-# API KEYS (Add your keys here - Keep secure!)
-# export CHAOS_KEY="your_chaos_api_key_here"
-# export SHODAN_KEY="your_shodan_api_key_here"
+# API KEYS (Configure as needed - Keep secure!)
+# export CHAOS_KEY="your_key_here"
+# export SHODAN_KEY="your_key_here"
 
 # RESOURCE DIRECTORY for shared files
-export RESOURCE_DIR="\${HOME}/.config/recon"
+export RESOURCE_DIR="${HOME}/.config/recon"
+ENVEOF
 
-# AUTO-LOAD MESSAGE (disable by setting to 'false')
-if [[ "\${_ENV_LOADED:-}" != "true" ]]; then
-    export _ENV_LOADED=true
-    if [[ "\${BASH_SUBSHELL}" == "0" ]]; then
-        echo -e "\033[0;36m═══════════════════════════════════════════════════════════\033[0m"
-        echo -e "\033[1;32m✅ Environment Loaded Successfully\033[0m"
-        echo -e "\033[0;36m───────────────────────────────────────────────────────────\033[0m"
-        echo -e "\033[0;34m🎯 Target:\033[0m           \${TARGET}"
-        echo -e "\033[0;34m📁 Base Directory:\033[0m    \${BASE_DIR}"
-        echo -e "\033[0;34m🔍 Recon Directory:\033[0m   \${RECON_DIR}"
-        echo -e "\033[0;34m🛡️  Scans Directory:\033[0m   \${SCANS_DIR}"
-        echo -e "\033[0;34m📋 Logs Directory:\033[0m    \${LOG_DIR}"
-        echo -e "\033[0;36m═══════════════════════════════════════════════════════════\033[0m"
-    fi
-fi
-EOF
+    # Safe replacement using sed on temp file
+    sed "s|TARGET_PLACEHOLDER|$target|g" "$temp_env" > "${temp_env}.1"
+    sed "s|BASEDIR_PLACEHOLDER|$base_dir|g" "${temp_env}.1" > "$env_file"
+    rm -f "${temp_env}.1"
+
+    # Set secure permissions
+    chmod 600 "$env_file" || error_msg "Cannot set permissions on .env file"
 
     success_msg "Environment file created"
     log_action "INFO" "Created .env file for $target"
@@ -270,77 +311,56 @@ EOF
 create_notes_file() {
     local target="$1"
     local base_dir="$2"
+    local notes_file="$base_dir/notes.txt"
+    local temp_notes
 
     info_msg "Creating notes.txt..."
 
-    cat > "$base_dir/notes.txt" << 'NOTES'
+    temp_notes=$(mktemp) || error_msg "Cannot create temporary file"
+    trap "rm -f '$temp_notes'" RETURN
+
+    cat > "$temp_notes" << 'NOTES'
 ╔═══════════════════════════════════════════════════════════════════╗
 ║                    BUG BOUNTY NOTES                               ║
 ╚═══════════════════════════════════════════════════════════════════╝
 
 📋 TARGET INFORMATION
 ═══════════════════════════════════════════════════════════════════
-  Target Domain : PLACEHOLDER_DOMAIN
-  Created On    : PLACEHOLDER_DATE
-  Author        : PLACEHOLDER_AUTHOR
+  Target Domain : TARGET_PLACEHOLDER
+  Created On    : DATE_PLACEHOLDER
+  Author        : AUTHOR_PLACEHOLDER
   Status        : ACTIVE
 
 📁 FOLDER STRUCTURE
 ═══════════════════════════════════════════════════════════════════
-  recon/          → Subdomain, IP, URL enumeration results
-  scans/          → Tool scan results (nmap, nuclei, ffuf)
-  screenshots/    → Visual proof of concept screenshots
-  reports/        → Draft reports and writeups
-  logs/           → Execution logs from recon.sh
+  recon/          → Subdomain enumeration results
+  scans/          → Tool scan results
+  screenshots/    → Proof of concept evidence
+  reports/        → Findings documentation
+  logs/           → Execution logs
 
-🚀 QUICK START WORKFLOW
+🚀 QUICK START
 ═══════════════════════════════════════════════════════════════════
-  1. Load Environment:
-     $ source .env
+  1. source .env
+  2. ../recon.sh
+  3. View results in recon/all_subdomains.txt
 
-  2. Run Reconnaissance:
-     $ ../recon.sh
-     (recon.sh will read TARGET and BASE_DIR from .env)
-
-  3. View Results:
-     $ cat recon/all_subdomains.txt
-     $ cat recon/live_subdomains.txt
-
-  4. Manual Testing:
-     $ cat recon/live_subdomains.txt | httpx -sc -title
-     $ nmap -sCV -oA scans/nmap/results $(head -1 recon/subdomains.txt)
-
-  5. Vulnerability Scanning:
-     $ nuclei -l recon/live_subdomains.txt -o scans/nuclei/results.txt
-
-📝 IMPORTANT NOTES
+📝 IMPORTANT
 ═══════════════════════════════════════════════════════════════════
-  ✏️  Document all findings
-  📸  Save screenshots in screenshots/
-  📄  Create reports in reports/
-  🔄  Update tools regularly: go install -u all
-  💾  Backup important results
+  ✏️  Document findings
+  📸  Save screenshots
   🔐  Never commit API keys
-  📊  Check logs/ for detailed logs
+  💾  Backup results
+  📊  Check logs/recon.log
 
-💡 FILE REFERENCE
-═══════════════════════════════════════════════════════════════════
-  recon/subdomains.txt      → All unique subdomains
-  recon/ip_addresses.txt    → IP addresses of targets
-  recon/urls.txt            → URLs discovered
-  scans/nmap/*.xml          → Nmap scan results
-  scans/nuclei/results.txt  → Vulnerability findings
-  logs/recon.log            → Recon tool execution log
-
-═══════════════════════════════════════════════════════════════════
-  Last Updated: PLACEHOLDER_DATE
 ═══════════════════════════════════════════════════════════════════
 NOTES
 
-    # Replace placeholders
-    sed -i "s|PLACEHOLDER_DOMAIN|$target|g" "$base_dir/notes.txt"
-    sed -i "s|PLACEHOLDER_DATE|$(date)|g" "$base_dir/notes.txt"
-    sed -i "s|PLACEHOLDER_AUTHOR|$AUTHOR|g" "$base_dir/notes.txt"
+    # Safe replacement on temp file
+    sed "s|TARGET_PLACEHOLDER|$target|g" "$temp_notes" > "${temp_notes}.1"
+    sed "s|DATE_PLACEHOLDER|$(date)|g" "${temp_notes}.1" > "${temp_notes}.2"
+    sed "s|AUTHOR_PLACEHOLDER|$AUTHOR|g" "${temp_notes}.2" > "$notes_file"
+    rm -f "${temp_notes}.1" "${temp_notes}.2"
 
     success_msg "Notes file created"
 }
@@ -348,13 +368,16 @@ NOTES
 create_readme_file() {
     local target="$1"
     local base_dir="$2"
+    local readme_file="$base_dir/README.md"
+    local temp_readme
 
-    cat > "$base_dir/README.md" << 'README'
-# 🎯 Bug Bounty Target: PLACEHOLDER_DOMAIN
+    temp_readme=$(mktemp) || error_msg "Cannot create temporary file"
+    trap "rm -f '$temp_readme'" RETURN
 
-**Author:** PLACEHOLDER_AUTHOR | **Created:** PLACEHOLDER_DATE | **Status:** ACTIVE
+    cat > "$temp_readme" << 'README'
+# 🎯 Bug Bounty Target: TARGET_PLACEHOLDER
 
----
+**Author:** AUTHOR_PLACEHOLDER | **Created:** DATE_PLACEHOLDER | **Status:** ACTIVE
 
 ## 📁 Directory Structure
 
@@ -362,9 +385,6 @@ create_readme_file() {
 target/
 ├── recon/              # Enumeration results
 ├── scans/              # Tool scan results
-│   ├── nmap/
-│   ├── nuclei/
-│   └── ffuf/
 ├── screenshots/        # POC evidence
 ├── reports/            # Writeups & drafts
 ├── logs/               # Execution logs
@@ -376,49 +396,27 @@ target/
 ## 🚀 Quick Start
 
 ```bash
-# Load environment
 source .env
-
-# Run reconnaissance
 ../recon.sh
-
-# View results
 cat recon/all_subdomains.txt
 ```
 
-## 🛠 Tools Used
-
-- **Subfinder** - Passive enumeration
-- **Assetfinder** - Asset discovery
-- **Httpx** - HTTP probing
-- **Nuclei** - Vulnerability scanning
-- **Nmap** - Port scanning
-- **FFUF** - Directory fuzzing
-
-## 📖 Workflow
-
-1. **Source environment:** `source .env`
-2. **Run recon:** `../recon.sh`
-3. **Check results:** View `recon/live_subdomains.txt`
-4. **Manual testing:** Perform targeted vulnerability assessment
-5. **Document:** Save findings and screenshots
-
 ## 📝 Important
 
-- 📸 Save proof screenshots in `screenshots/`
-- 📄 Document findings in `notes.txt`
-- 🔐 Never commit `.env` with real API keys
-- 💾 Backup important scan results
-- 📊 Check `logs/recon.log` for detailed output
+- Never commit `.env` with real API keys
+- Backup important scan results
+- Check `logs/recon.log` for detailed output
 
 ---
 
 Happy Hunting! 🎯
 README
 
-    sed -i "s|PLACEHOLDER_DOMAIN|$target|g" "$base_dir/README.md"
-    sed -i "s|PLACEHOLDER_DATE|$(date)|g" "$base_dir/README.md"
-    sed -i "s|PLACEHOLDER_AUTHOR|$AUTHOR|g" "$base_dir/README.md"
+    # Safe replacement on temp file
+    sed "s|TARGET_PLACEHOLDER|$target|g" "$temp_readme" > "${temp_readme}.1"
+    sed "s|AUTHOR_PLACEHOLDER|$AUTHOR|g" "${temp_readme}.1" > "${temp_readme}.2"
+    sed "s|DATE_PLACEHOLDER|$(date)|g" "${temp_readme}.2" > "$readme_file"
+    rm -f "${temp_readme}.1" "${temp_readme}.2"
 
     info_msg "Created README.md"
 }
@@ -433,9 +431,7 @@ deactivate_target() {
         error_msg "Target not found: $name"
     fi
 
-    echo "inactive" > "$path/status.txt"
-    echo "Deactivated: $(date)" >> "$path/status.txt"
-
+    printf 'inactive\nDeactivated: %s\n' "$(date)" > "$path/status.txt"
     [[ -f "$path/.env" ]] && mv "$path/.env" "$path/.env.inactive"
     touch "$path/INACTIVE"
 
@@ -453,130 +449,204 @@ activate_target() {
     fi
 
     rm -f "$path/INACTIVE"
-    echo "active" > "$path/status.txt"
-    echo "Activated: $(date)" >> "$path/status.txt"
-
+    printf 'active\nActivated: %s\n' "$(date)" > "$path/status.txt"
     [[ -f "$path/.env.inactive" ]] && mv "$path/.env.inactive" "$path/.env"
 
     success_msg "Target activated: $name"
+}
+
+delete_target() {
+    local name="$1"
+    local path="$TARGETS_DIR/$name"
+
+    if [[ ! -d "$path" ]]; then
+        error_msg "Target not found: $name"
+    fi
+
+    if [[ "$FORCE_MODE" == "false" ]]; then
+        local answer
+        printf 'Delete target %b%s%b? (y/N): ' "${RED}" "$name" "${NC}"
+        read -r -n 1 answer
+        printf '\n'
+        if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+            info_msg "Deletion cancelled"
+            return 0
+        fi
+    fi
+
+    rm -rf "$path" || error_msg "Failed to delete target: $name"
+    success_msg "Target deleted: $name"
+    log_action "INFO" "Deleted: $name"
+}
+
+# ============================================
+# TARGET MANAGEMENT
+# ============================================
+
+list_targets() {
+    log_action "INFO" "Listing targets"
+
+    printf '%b📋 Bug Bounty Targets:%b\n' "${CYAN}" "${NC}"
+    printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' "${PURPLE}" "${NC}"
+
+    if [[ ! -d "$TARGETS_DIR" ]]; then
+        printf '%bNo targets yet%b\n' "${YELLOW}" "${NC}"
+        return 0
+    fi
+
+    local found=false
+    local target_count=0
+    for target_path in "$TARGETS_DIR"/*/; do
+        [[ ! -d "$target_path" ]] && continue
+        found=true
+        ((target_count++))
+
+        local name
+        name=$(basename "$target_path")
+        local status_file="$target_path/status.txt"
+        local status="unknown"
+
+        if [[ -f "$status_file" ]]; then
+            status=$(head -n 1 "$status_file" 2>/dev/null || echo "unknown")
+        fi
+
+        case "$status" in
+            active)   printf '%b● ACTIVE%b   - %s\n' "${GREEN}" "${NC}" "$name" ;;
+            inactive) printf '%b○ INACTIVE%b - %s\n' "${GRAY}" "${NC}" "$name" ;;
+            *)        printf '%b? UNKNOWN%b  - %s\n' "${YELLOW}" "${NC}" "$name" ;;
+        esac
+    done
+
+    if [[ "$found" == "false" ]]; then
+        printf '%bNo targets found%b\n' "${YELLOW}" "${NC}"
+    else
+        printf '%bTotal: %d%b\n' "${CYAN}" "$target_count" "${NC}"
+    fi
+
+    printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' "${PURPLE}" "${NC}"
 }
 
 # ============================================
 # MAIN PROGRAM
 # ============================================
 
-setup_logging
+parse_arguments() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -f|--force)  FORCE_MODE=true; shift ;;
+            -s|--silent) SILENT_MODE=true; shift ;;
+            -h|--help)   show_help; exit 0 ;;
+            -v|--version) show_version; exit 0 ;;
+            -*)          error_msg "Unknown option: $1" ;;
+            *)           break ;;
+        esac
+    done
 
-if [[ $# -eq 0 ]]; then
-    show_banner
-    echo -e "${YELLOW}Usage: $SCRIPT_NAME <command> [options]${NC}"
-    echo ""
-    echo -e "${CYAN}Commands:${NC}"
-    echo "  new <domain>        Create new target"
-    echo "  list                List all targets"
-    echo "  activate <domain>   Activate target"
-    echo "  deactivate <domain> Deactivate target"
-    echo "  delete <domain>     Delete target (irreversible!)"
-    echo ""
-    echo -e "${CYAN}Examples:${NC}"
-    echo "  $SCRIPT_NAME new example.com"
-    echo "  $SCRIPT_NAME list"
-    echo "  $SCRIPT_NAME activate example.com"
-    echo ""
-    exit 1
-fi
+    echo "$@"
+}
 
-COMMAND="$1"
+main() {
+    # Parse global options first
+    local remaining
+    remaining=$(parse_arguments "$@")
+    set -- $remaining
 
-case "$COMMAND" in
-    new)
-        [[ -z "${2:-}" ]] && error_msg "Domain required!"
-        TARGET="$2"
-        ;;
-    list)
-        list_targets
-        exit 0
-        ;;
-    activate)
-        [[ -z "${2:-}" ]] && error_msg "Target name required!"
-        activate_target "$2"
-        exit 0
-        ;;
-    deactivate)
-        [[ -z "${2:-}" ]] && error_msg "Target name required!"
-        deactivate_target "$2"
-        exit 0
-        ;;
-    delete)
-        [[ -z "${2:-}" ]] && error_msg "Target name required!"
-        read -p "Delete target '$2'? (y/N): " -n 1 -r answer
-        echo
-        if [[ "$answer" =~ ^[Yy]$ ]] && [[ -d "$TARGETS_DIR/$2" ]]; then
-            rm -rf "$TARGETS_DIR/$2"
-            success_msg "Target deleted: $2"
-        fi
-        exit 0
-        ;;
-    *)
-        error_msg "Unknown command: $COMMAND"
-        ;;
-esac
+    setup_logging
 
-# ============================================
-# NEW TARGET CREATION
-# ============================================
-
-show_banner
-
-log_action "INFO" "Creating new target: $TARGET"
-
-TARGET=$(sanitize_domain "$TARGET")
-validate_domain "$TARGET" || error_msg "Invalid domain: $TARGET"
-
-readonly BASE_DIR="$TARGETS_DIR/$TARGET"
-
-echo -e "${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-info_msg "Target:        ${WHITE}$TARGET${NC}"
-info_msg "Base Directory: ${WHITE}$BASE_DIR${NC}"
-echo -e "${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-
-if [[ -d "$BASE_DIR" ]]; then
-    warning_msg "Target folder already exists!"
-    read -p "Recreate? (y/N): " -n 1 -r answer
-    echo
-    if [[ "$answer" =~ ^[Yy]$ ]]; then
-        rm -rf "$BASE_DIR"
-        info_msg "Folder removed"
+    # Require at least one command
+    if [[ $# -eq 0 ]]; then
+        show_banner
+        printf '%bUsage: %s <command> [options]%b\n' "${YELLOW}" "$SCRIPT_NAME" "${NC}"
+        printf '\nRun with --help for more information\n'
+        exit 1
     fi
-fi
 
-# Create structure
-mkdir -p "$BASE_DIR"
-create_target_structure "$TARGET" "$BASE_DIR"
+    local command="$1"
+    shift || true
 
-# Create files
-echo "active" > "$BASE_DIR/status.txt"
-echo "Created: $(date)" >> "$BASE_DIR/status.txt"
+    case "$command" in
+        new)
+            [[ -z "${1:-}" ]] && error_msg "Domain required"
+            show_banner
 
-create_env_file "$TARGET" "$BASE_DIR"
-create_notes_file "$TARGET" "$BASE_DIR"
-create_readme_file "$TARGET" "$BASE_DIR"
+            local target="${1:-}"
+            target=$(sanitize_domain "$target")
+            validate_domain "$target" || error_msg "Invalid domain: $target"
 
-# Final output
-echo ""
-echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║              ✅ SETUP COMPLETED ✅                       ║${NC}"
-echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
-echo ""
-success_msg "Target created: ${WHITE}$TARGET${NC}"
-echo -e "${CYAN}📂 Location: ${WHITE}$BASE_DIR${NC}"
-echo ""
-echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
-echo -e "${WHITE}🚀 NEXT STEPS:${NC}"
-echo -e "${CYAN}  cd $BASE_DIR${NC}"
-echo -e "${CYAN}  source .env${NC}"
-echo -e "${CYAN}  cd $SCRIPT_DIR && ./recon.sh${NC}"
-echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
-echo ""
+            local base_dir="$TARGETS_DIR/$target"
+            validate_target_dir "$base_dir"
 
-log_action "SUCCESS" "Target created: $TARGET"
+            printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' "${PURPLE}" "${NC}"
+            info_msg "Target:        $target"
+            info_msg "Base Directory: $base_dir"
+            printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' "${PURPLE}" "${NC}"
+
+            if [[ -d "$base_dir" ]]; then
+                warning_msg "Target folder already exists"
+                if [[ "$FORCE_MODE" == "false" ]]; then
+                    local answer
+                    printf 'Recreate? (y/N): '
+                    read -r -n 1 answer
+                    printf '\n'
+                    if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+                        info_msg "Creation cancelled"
+                        exit 0
+                    fi
+                fi
+                rm -rf "$base_dir" || error_msg "Cannot remove existing directory"
+                info_msg "Existing folder removed"
+            fi
+
+            mkdir -p "$base_dir" || error_msg "Cannot create base directory"
+            create_target_structure "$target" "$base_dir"
+
+            # Create status file
+            printf 'active\nCreated: %s\n' "$(date)" > "$base_dir/status.txt"
+
+            # Create configuration files
+            create_env_file "$target" "$base_dir"
+            create_notes_file "$target" "$base_dir"
+            create_readme_file "$target" "$base_dir"
+
+            printf '\n'
+            printf '%b╔════════════════════════════════════════════════════╗%b\n' "${GREEN}" "${NC}"
+            printf '%b║              ✅ SETUP COMPLETED ✅                 ║%b\n' "${GREEN}" "${NC}"
+            printf '%b╚════════════════════════════════════════════════════╝%b\n' "${GREEN}" "${NC}"
+            success_msg "Target created: $target"
+            printf '%bLocation: %s%b\n' "${CYAN}" "$base_dir" "${NC}"
+            printf '\n%bNEXT STEPS:%b\n' "${GREEN}" "${NC}"
+            printf '  cd %s\n' "$base_dir"
+            printf '  source .env\n'
+            printf '  %s/recon.sh\n' "$SCRIPT_DIR"
+            printf '\n'
+
+            log_action "SUCCESS" "Target created: $target"
+            ;;
+
+        list)
+            show_banner
+            list_targets
+            ;;
+
+        activate)
+            [[ -z "${1:-}" ]] && error_msg "Target name required"
+            activate_target "$1"
+            ;;
+
+        deactivate)
+            [[ -z "${1:-}" ]] && error_msg "Target name required"
+            deactivate_target "$1"
+            ;;
+
+        delete)
+            [[ -z "${1:-}" ]] && error_msg "Target name required"
+            delete_target "$1"
+            ;;
+
+        *)
+            error_msg "Unknown command: $command"
+            ;;
+    esac
+}
+
+main "$@"

@@ -1,265 +1,497 @@
-# RECON Tool - Enumerasi Subdomain & Reconnaissance
+# 🐛 Framework Tools Pencariankeliruan Bug Bounty
 
-[![Bash](https://img.shields.io/badge/Bash-4.0%2B-blue.svg)](https://www.gnu.org/software/bash/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-
-Script Bash yang powerful dan otomatis untuk enumerasi subdomain dan reconnaissance secara komprehensif menggunakan berbagai teknik passive dan active.
-
-## 🎯 Fitur
-
-- **Enumerasi Passive Multi-Sumber**: Menggabungkan hasil dari subfinder, assetfinder, dan chaos-client
-- **Brute Force Active**: Menggunakan shuffledns dengan wordlist yang dapat dikustomisasi
-- **Permutasi Pintar**: Menghasilkan dan menguji permutasi subdomain menggunakan altdns
-- **Resolusi DNS & Filtering**: Memvalidasi subdomain dan memfilter hasil wildcard
-- **Pengecekan Subdomain Live**: Menguji ketersediaan HTTP/HTTPS dengan httpx
-- **Auto-Detection**: Otomatis mendeteksi binary altdns di lokasi umum
-- **Resume Capability**: Dapat melanjutkan scan yang terinterupsi
-- **Konfigurasi Environment**: Sepenuhnya dapat dikonfigurasi via file .env
-- **Progress Tracking**: Progress bar real-time dan logging detail
-- **Production Ready**: Error handling yang robust dan mekanisme retry
-
-## 🛠️ Tools yang Digunakan
-
-- [subfinder](https://github.com/projectdiscovery/subfinder) - Enumerasi subdomain passive
-- [assetfinder](https://github.com/tomnomnom/assetfinder) - Penemuan subdomain berbasis asset
-- [chaos-client](https://github.com/projectdiscovery/chaos-client) - Enumerasi dataset Chaos
-- [shuffledns](https://github.com/projectdiscovery/shuffledns) - Brute force active
-- [altdns](https://github.com/infosec-au/altdns) - Permutasi subdomain
-- [puredns](https://github.com/d3mondev/puredns) - Resolusi DNS dan filtering wildcard
-- [httpx](https://github.com/projectdiscovery/httpx) - Pengecekan subdomain live
-
-## 📋 Persyaratan
-
-- **Bash 4.0+**
-- **Go 1.19+** (untuk menginstall tools)
-- **Python 3.x** (untuk altdns)
-- **curl** (untuk mendownload resolvers)
-
-## 🚀 Instalasi
-
-### 1. Clone Repository
-```bash
-git clone https://github.com/yourusername/recon-tool.git
-cd recon-tool
-```
-
-### 2. Install Tools yang Dibutuhkan
-```bash
-# Install tools Go
-go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
-go install github.com/tomnomnom/assetfinder@latest
-go install github.com/projectdiscovery/chaos-client/cmd/chaos@latest
-go install github.com/projectdiscovery/shuffledns/cmd/shuffledns@latest
-go install github.com/d3mondev/puredns/v2@latest
-go install github.com/projectdiscovery/httpx/cmd/httpx@latest
-
-# Install tools Python
-pip install altdns
-```
-
-### 3. Jadikan Script Executable
-```bash
-chmod +x recon.sh
-```
-
-## ⚙️ Konfigurasi
-
-### Environment Variables (.env)
-
-Buat file `.env` di direktori yang sama dengan script:
-
-```bash
-# Chaos API Key untuk chaos-client
-CHAOS_KEY=your_actual_api_key_here
-
-# Variabel konfigurasi (opsional, akan menggunakan default jika tidak diset)
-RATE_LIMIT=50                    # Batas rate query DNS
-MODE=auto                        # Mode scan: auto/passive/full
-TOOL_VERSION=1.0                 # Versi tool
-LOG_DIR=logs                     # Nama direktori log
-RESOURCE_DIR=$HOME/.config/recon # Direktori untuk file shared (resolvers.txt, wordlist.txt)
-ALT_DNS_PATH=                    # Path custom ke binary altdns (kosongkan untuk auto-detection)
-```
-
-### File Shared
-
-Script otomatis mengelola file shared di `~/.config/recon/`:
-- `resolvers.txt` - DNS resolvers (auto-download)
-- `wordlist.txt` - Wordlist default untuk brute force
-
-## 📖 Cara Penggunaan
-
-### Penggunaan Dasar
-```bash
-./recon.sh example.com
-```
-
-### Penggunaan Lanjutan
-```bash
-# Mode passive saja
-./recon.sh --domain example.com --mode passive
-
-# Scan penuh dengan direktori output custom
-./recon.sh --domain example.com --mode full --output hasil_scan_saya
-
-# Rate limit tinggi untuk scanning lebih cepat
-./recon.sh --domain example.com --rate 100
-
-# Path altdns custom
-./recon.sh --domain example.com --altdns-path /path/to/altdns
-
-# Mode silent (tanpa output berwarna)
-./recon.sh --domain example.com --silent
-```
-
-### Opsi Command Line
-
-| Opsi | Deskripsi | Default |
-|------|-----------|---------|
-| `--domain <domain>` | Domain target (wajib) | - |
-| `--output <dir>` | Direktori output | auto-generated |
-| `--rate <number>` | Batas rate query DNS | 50 |
-| `--mode <mode>` | Mode scan (auto/passive/full) | auto |
-| `--altdns-path <path>` | Path custom binary altdns | auto-detect |
-| `--silent` | Mode silent (tanpa warna) | false |
-| `--help, -h` | Tampilkan pesan bantuan | - |
-| `--version` | Tampilkan versi | - |
-
-### Mode Scan
-
-- **auto**: Otomatis memilih antara passive dan full berdasarkan hasil passive
-- **passive**: Hanya enumerasi passive (aman, tanpa active scanning)
-- **full**: Scan lengkap termasuk active brute force dan permutasi
-
-## 📁 Struktur Output
-
-```
-recon_example.com/
-├── passive/
-│   ├── subfinder.txt           # hasil subfinder
-│   ├── assetfinder.txt         # hasil assetfinder
-│   ├── chaos.txt              # hasil chaos-client
-│   ├── passive_all.txt        # gabungan hasil passive
-│   └── resolved.txt           # subdomain yang tervalidasi
-├── active/
-│   ├── brute_temp.txt         # hasil brute force mentah
-│   └── brute_resolved.txt     # hasil brute force tervalidasi
-├── permutation/
-│   ├── custom_words.txt       # wordlist custom dari hasil passive
-│   ├── final_wordlist.txt     # wordlist gabungan
-│   ├── permutasi_temp.txt     # hasil permutasi mentah
-│   ├── permutasi_final.txt    # hasil permutasi final
-│   ├── permutasi_clean.txt    # permutasi terfilter
-│   └── permutasi_resolved.txt # permutasi tervalidasi
-├── final/
-│   ├── all_subdomains.txt     # semua subdomain unik
-│   └── live_subdomains.txt    # subdomain live dengan info HTTP
-└── logs/
-    └── recon.log              # log eksekusi detail
-```
-
-## 📊 Contoh Output
-
-```
-════════════════════════════════════════════════════════════
-🎯 TARGET DOMAIN: example.com
-📁 OUTPUT DIRECTORY: recon_example.com
-════════════════════════════════════════════════════════════
-
-🕵️  PASSIVE ENUMERATION (Mencari subdomain dari sumber publik)...
-   🔍 Menjalankan subfinder...
-      ✅ subfinder menemukan 45 subdomain
-   🔍 Menjalankan assetfinder...
-      ✅ assetfinder menemukan 23 subdomain
-   🔍 Menjalankan chaos-client...
-      ✅ chaos-client menemukan 12 subdomain
-
-   📊 TOTAL PASSIVE UNIQUE: 67 subdomain
-
-✅ AUTO mode: Hasil passive cukup, tetap PASSIVE mode
-
-🔍 RESOLVE & WILDCARD FILTERING (Memfilter subdomain palsu)...
-   🧹 Menjalankan puredns untuk filtering wildcard...
-      ✅ Subdomain valid: 62
-
-📦 MENGGABUNGKAN SEMUA HASIL...
-   📊 FINAL SUBDOMAIN COUNT: 62
-
-🌐 MENGECEK SUBDOMAIN LIVE (HTTP/HTTPS)...
-   🚀 Menjalankan httpx untuk cek live...
-      ✅ Subdomain live: 58
-
-════════════════════════════════════════════════════════════
-📋 RINGKASAN HASIL RECONNAISSANCE
-════════════════════════════════════════════════════════════
-
-   📊 STATISTIK:
-      ├── Passive enumeration : 67 subdomain
-      ├── Active brute force  : 0 subdomain
-      ├── Permutasi           : 0 subdomain
-      ├── TOTAL UNIQUE        : 62 subdomain
-      └── LIVE SUBDOMAIN      : 58 subdomain
-
-   ⏱️  WAKTU EKSEKUSI: 2 menit 34 detik
-```
-
-## 🔧 Troubleshooting
-
-### Masalah Umum
-
-1. **Tools tidak ditemukan**
-   ```bash
-   # Cek apakah tools sudah terinstall
-   which subfinder assetfinder chaos shuffledns puredns httpx altdns
-   ```
-
-2. **Permission denied**
-   ```bash
-   chmod +x recon.sh
-   ```
-
-3. **altdns tidak ditemukan**
-   ```bash
-   # Install altdns
-   pip install altdns
-
-   # Atau tentukan path custom
-   ./recon.sh --domain example.com --altdns-path /path/to/altdns
-   ```
-
-4. **CHAOS_KEY tidak diset**
-   ```bash
-   # Tambahkan ke file .env
-   echo "CHAOS_KEY=your_api_key_here" >> .env
-   ```
-
-### Mode Debug
-
-Aktifkan logging detail dengan mengecek file `logs/recon.log` di direktori output.
-
-## 🤝 Contributing
-
-1. Fork repository
-2. Buat feature branch (`git checkout -b feature/fitur-hebat`)
-3. Commit perubahan Anda (`git commit -m 'Tambah fitur hebat'`)
-4. Push ke branch (`git push origin feature/fitur-hebat`)
-5. Buka Pull Request
-
-## 📄 Lisensi
-
-Project ini dilisensikan di bawah MIT License - lihat file [LICENSE](LICENSE) untuk detail.
-
-## ⚠️ Disclaimer
-
-Tools ini untuk tujuan pendidikan dan penelitian keamanan etis saja. Pengguna bertanggung jawab untuk mematuhi hukum dan regulasi yang berlaku. Penulis tidak bertanggung jawab atas penyalahgunaan atau aktivitas ilegal.
-
-## 🙏 Acknowledgments
-
-- [ProjectDiscovery](https://github.com/projectdiscovery) untuk tools keamanan yang excellent
-- [Tom Hudson](https://github.com/tomnomnom) untuk assetfinder
-- [Infosec AU](https://github.com/infosec-au) untuk altdns
-- Semua kontributor dan komunitas penelitian keamanan
+**Penulis:** BRYNNNN12 | **Versi:** 1.0 | **Status:** Siap Produksi
 
 ---
 
-**Dibuat dengan ❤️ oleh BRYNNNN12**
+## 📋 Ikhtisar
+
+Framework bug bounty yang komprehensif dan modular dirancang untuk peneliti keamanan profesional. Framework ini menyediakan alat yang tersinkronisasi untuk manajemen target, pengintaian (reconnaissance), dan penilaian kerentanan otomatis.
+
+### 🎯 Fitur Utama
+
+- **🔄 Sepenuhnya Tersinkronisasi**: Konfigurasi berbasis lingkungan antar semua alat
+- **🏗️ Arsitektur Modular**: Pemisahan yang jelas tanpa duplikasi kode
+- **🛡️ Fokus Keamanan**: Pemuatan lingkungan yang aman, tanpa risiko eval(), penanganan kesalahan tingkat enterprise
+- **📊 Siap Produksi**: Pencatatan terpusat, mekanisme trap, dan dokumentasi komprehensif
+- **🚀 Dapat Diperluas**: Mudah menambahkan alat baru dan mengintegrasikan dengan alur kerja yang ada
+
+---
+
+## 🛠️ Alat yang Tersedia
+
+### 1. **target.sh** - Alat Manajemen Target
+- **Tujuan**: Membuat dan mengelola lingkungan target bug bounty
+- **Fitur**:
+  - Pembuatan struktur direktori otomatis
+  - Pembuatan berkas lingkungan (.env)
+  - Aktivasi/deaktivasi target
+  - Dokumentasi komprehensif (README.md, notes.txt)
+  - Validasi direktori target (cegah root/home)
+  - Dukungan CLI flags (--force, --silent, --help, --version)
+- **Versi**: 2.2 (Siap Produksi)
+
+### 2. **recon.sh** - Alat Pengintaian (Reconnaissance)
+- **Tujuan**: Enumerasi subdomain otomatis dan pengintaian
+- **Fitur**:
+  - Enumerasi pasif (subfinder, assetfinder, chaos-client)
+  - Brute force aktif (shuffledns, puredns)
+  - Pemeriksaan subdomain live (httpx)
+  - Pemilihan mode cerdas (passive/active/auto)
+  - Pembatasan laju (rate limiting) DNS
+  - Output JSON opsional
+  - Optimasi performa (cache file counts)
+- **Versi**: 2.2 (Siap Produksi)
+
+### 🔮 Alat Masa Depan (Segera Hadir)
+- **scan.sh** - Orkestrator Pemindaian Kerentanan
+- **report.sh** - Pembuatan Laporan Otomatis
+- **monitor.sh** - Pemantauan & Peringatan Target
+- **exploit.sh** - Manajemen Bukti Konsep (PoC)
+
+---
+
+## 📦 Instalasi
+
+### Prasyarat
+
+```bash
+# Alat yang Diperlukan
+go install -u github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+go install -u github.com/tomnomnom/assetfinder@latest
+go install -u github.com/projectdiscovery/httpx/cmd/httpx@latest
+go install -u github.com/projectdiscovery/shuffledns/cmd/shuffledns@latest
+go install -u github.com/projectdiscovery/puredns/v2/cmd/puredns@latest
+
+# Alat Opsional
+go install -u github.com/projectdiscovery/chaos-client/cmd/chaos@latest
+go install -u github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+go install -u github.com/ffuf/ffuf@latest
+
+# Wordlist & Sumber Daya
+sudo apt update && sudo apt install -y seclists
+```
+
+### Penyiapan
+
+```bash
+# Klon repositori
+git clone https://github.com/Brynnnn12/tools-hunting.git
+cd tools-hunting
+
+# Buat script dapat dieksekusi
+chmod +x *.sh
+
+# Opsional: Tambahkan ke PATH
+echo 'export PATH="$PWD:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+---
+
+## 🚀 Mulai Cepat
+
+### 1. Buat Target Baru
+
+```bash
+# Buat lingkungan target untuk example.com
+./target.sh new example.com
+```
+
+**Output:**
+```
+✅ Target dibuat: example.com
+📂 Lokasi: /home/user/bugbounty/targets/example.com
+```
+
+### 2. Arahkan ke Direktori Target
+
+```bash
+cd /home/user/bugbounty/targets/example.com
+```
+
+### 3. Muat Lingkungan
+
+```bash
+source .env
+```
+
+**Variabel Lingkungan Dimuat:**
+- `TARGET=example.com`
+- `BASE_DIR=/home/user/bugbounty/targets/example.com`
+- `RECON_DIR=${BASE_DIR}/recon`
+- `SCANS_DIR=${BASE_DIR}/scans`
+- `LOGS_DIR=${BASE_DIR}/logs`
+
+### 4. Jalankan Pengintaian
+
+```bash
+# Jalankan dari direktori target
+../recon.sh
+
+# Atau tentukan opsi
+../recon.sh --mode full --rate 100
+```
+
+### 5. Lihat Hasil
+
+```bash
+# Periksa subdomain yang ditemukan
+cat recon/all_subdomains.txt
+cat recon/live_subdomains.txt
+
+# Lihat log eksekusi
+cat logs/recon.log
+```
+
+---
+
+## 📁 Struktur Direktori
+
+```
+bugbounty/
+├── targets/                    # Lingkungan target (dibuat oleh target.sh)
+│   └── example.com/
+│       ├── recon/              # Hasil enumerasi
+│       │   ├── passive_subdomains.txt
+│       │   ├── active_subdomains.txt
+│       │   ├── all_subdomains.txt
+│       │   └── live_subdomains.txt
+│       ├── scans/              # Hasil pemindaian alat
+│       ├── screenshots/        # Bukti PoC
+│       ├── reports/            # Laporan & draft
+│       ├── logs/               # Log eksekusi
+│       │   └── recon.log
+│       ├── .env                # Variabel lingkungan (chmod 600)
+│       ├── notes.txt           # Dokumentasi
+│       ├── README.md           # Dok khusus target
+│       └── status.txt          # Status target
+├── tools-hunting/              # Akar framework
+│   ├── target.sh               # Manajemen target
+│   ├── recon.sh                # Pengintaian
+│   ├── README.md               # Berkas ini
+│   └── [future_tools.sh]       # Akan datang
+└── .config/
+    └── recon/                  # Sumber daya bersama
+        ├── resolvers.txt       # DNS resolver
+        └── wordlist.txt        # Wordlist subdomain
+```
+
+---
+
+## 🎮 Panduan Penggunaan
+
+### Perintah target.sh
+
+```bash
+# Buat target baru
+./target.sh new <domain>
+
+# Daftar semua target
+./target.sh list
+
+# Aktifkan target
+./target.sh activate <domain>
+
+# Nonaktifkan target
+./target.sh deactivate <domain>
+
+# Hapus target (tidak dapat dikembalikan)
+./target.sh delete <domain>
+
+# Tampilkan bantuan
+./target.sh --help
+
+# Tampilkan versi
+./target.sh --version
+
+# Buat dengan flag force (lewati prompt)
+./target.sh new <domain> --force
+```
+
+### Opsi recon.sh
+
+```bash
+# Penggunaan dasar (mode auto)
+./recon.sh
+
+# Hanya enumerasi pasif
+./recon.sh --mode passive
+
+# Enumerasi penuh (pasif + aktif)
+./recon.sh --mode full
+
+# Batas laju kustom
+./recon.sh --rate 200
+
+# Mode senyap (tanpa warna)
+./recon.sh --silent
+
+# Output JSON
+./recon.sh --json
+
+# Bantuan
+./recon.sh --help
+
+# Versi
+./recon.sh --version
+```
+
+### Konfigurasi Lingkungan
+
+Edit `.env` di direktori target untuk menyesuaikan:
+
+```bash
+# Pengaturan pengintaian
+export RATE_LIMIT=100          # Batas laju kueri DNS
+export MODE="auto"             # auto/passive/full
+export TOOL_VERSION="1.0"
+
+# Kunci API (simpan dengan aman!)
+export CHAOS_KEY="your_key_here"
+export SHODAN_KEY="your_key_here"
+
+# Jalur sumber daya
+export RESOURCE_DIR="${HOME}/.config/recon"
+```
+
+---
+
+## 🔧 Konfigurasi
+
+### Konfigurasi Global
+
+```bash
+# Atur penulis default
+export AUTHOR="Nama Anda"
+
+# Direktori target kustom
+export TARGETS_DIR="/path/to/targets"
+
+# Versi alat
+export TOOL_VERSION="1.0"
+
+# Direktori sumber daya
+export RESOURCE_DIR="${HOME}/.config/recon"
+```
+
+### Konfigurasi Khusus Alat
+
+Setiap alat membaca dari berkas `.env` target untuk konfigurasi yang tersinkronisasi.
+
+---
+
+## 📈 Berkas Output
+
+### Hasil Pengintaian
+- `recon/all_subdomains.txt` - Semua subdomain unik yang ditemukan
+- `recon/live_subdomains.txt` - Subdomain live dengan detail HTTP
+- `recon/passive_subdomains.txt` - Hasil enumerasi pasif
+- `recon/active_subdomains.txt` - Hasil brute force aktif
+
+### Log & Pemantauan
+- `logs/recon.log` - Log eksekusi terperinci dengan stempel waktu
+- `logs/setup.log` - Log pembuatan target (global)
+
+### Dokumentasi
+- `notes.txt` - Catatan manual dan temuan
+- `README.md` - Dokumentasi khusus target
+- `reports/` - Draft laporan dan writeup
+- `screenshots/` - Bukti PoC visual
+
+---
+
+## 🛠️ Alat yang Terintegrasi
+
+### Alat Inti
+- **Subfinder** - Enumerasi subdomain pasif
+- **Assetfinder** - Penemuan aset
+- **Chaos Client** - Dataset chaos ProjectDiscovery
+- **Shuffledns** - Brute force subdomain aktif
+- **Puredns** - Resolusi DNS dengan filter wildcard
+- **Httpx** - Probing HTTP dan pemeriksaan status
+
+### Integrasi Masa Depan
+- **Nuclei** - Pemindaian kerentanan
+- **Nmap** - Pemindaian port
+- **FFUF** - Fuzzing direktori
+- **SQLMap** - Pengujian injeksi SQL
+- **Dirbuster** - Enumerasi direktori
+
+---
+
+## 🔐 Fitur Keamanan
+
+- **Pemuatan Lingkungan Aman**: Tidak ada penggunaan eval(), parsing berbasis sed
+- **Validasi Masukan**: Sanitasi domain dan validasi
+- **Penanganan Kesalahan**: Penanganan kesalahan komprehensif dengan nomor baris
+- **Manajemen Kunci API Aman**: Manajemen kunci berbasis lingkungan
+- **Log Audit**: Semua tindakan dicatat dengan stempel waktu
+- **Izin File**: .env dilindungi dengan chmod 600 (pengguna saja baca/tulis)
+- **Parsing Whitelist**: Hanya membaca variabel yang diketahui (tidak ada injeksi)
+
+---
+
+## 🚨 Troubleshooting
+
+### Masalah Umum
+
+**Error "Tool not found":**
+```bash
+# Instal alat yang hilang
+go install -u github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+```
+
+**Permission denied (Izin ditolak):**
+```bash
+chmod +x *.sh
+```
+
+**Lingkungan tidak dimuat:**
+```bash
+# Pastikan Anda berada di direktori target
+cd /path/to/target
+source .env
+```
+
+**Masalah pembatasan laju:**
+```bash
+# Kurangi batas laju di .env
+export RATE_LIMIT=25
+```
+
+### Mode Debug
+
+Aktifkan pencatatan verbose:
+```bash
+export DEBUG=true
+./recon.sh
+```
+
+### Cek Alat
+
+```bash
+# Verifikasi alat dipasang dengan benar
+which subfinder
+which assetfinder
+which httpx
+which puredns
+```
+
+---
+
+## 🤝 Berkontribusi
+
+### Menambahkan Alat Baru
+
+1. **Ikuti Pola Framework:**
+   - Gunakan `.env` untuk konfigurasi
+   - Terapkan pencatatan terpusat
+   - Tambahkan penanganan kesalahan trap
+   - Buat dokumentasi komprehensif
+
+2. **Standar Kode:**
+   - Mode strict Bash: `set -euo pipefail`
+   - Fungsi modular
+   - Kode warna konsisten
+   - Pendekatan security-first
+
+3. **Dokumentasi:**
+   - Perbarui README.md ini
+   - Tambahkan bantuan khusus alat
+   - Sertakan contoh penggunaan
+
+### Alur Kerja Pengembangan
+
+```bash
+# Buat cabang fitur
+git checkout -b feature/new-tool
+
+# Uji secara menyeluruh
+./new_tool.sh --help
+
+# Perbarui dokumentasi
+vim README.md
+
+# Komit perubahan
+git commit -am "Add new_tool.sh"
+
+# Push dan buat PR
+git push origin feature/new-tool
+```
+
+---
+
+## 📈 Roadmap
+
+### Versi 1.0 (SAAT INI) ✅
+- [x] Optimasi performa (cache file counts)
+- [x] Output JSON opsional
+- [x] Validasi target directory (cegah root/home)
+- [x] CLI flags lengkap (--force, --silent, --help, --version)
+- [x] Printf conversion (kompatibel macOS/Linux/WSL)
+- [x] Mktemp untuk operasi file (portabilitas)
+
+### Versi 1.1 (Direncanakan)
+- [ ] scan.sh - Orkestrator pemindaian kerentanan
+- [ ] Pembuatan laporan otomatis
+- [ ] Integrasi Slack/Discord
+- [ ] Progress bar yang ditingkatkan
+
+### Versi 3.0 (Visi Jangka Panjang)
+- [ ] Antarmuka web
+- [ ] Kampanye multi-target
+- [ ] Analytics lanjutan
+- [ ] Dashboard real-time
+
+### Fitur Komunitas
+- [ ] Sistem plugin
+- [ ] Manajemen wordlist kustom
+- [ ] Sistem template untuk laporan
+
+---
+
+## 📄 Lisensi
+
+Proyek ini dilisensikan di bawah Lisensi MIT - lihat berkas LICENSE untuk detail.
+
+---
+
+## 🙏 Penghargaan
+
+- **ProjectDiscovery** - Untuk alat keamanan yang luar biasa
+- **Tomnomnom** - Assetfinder dan utilitas lainnya
+- **OWASP** - Komunitas riset keamanan
+- **Bug Bounty Hunters** - Untuk inspirasi dan umpan balik
+- **Komunitas Open Source** - Untuk kontribusi berkelanjutan
+
+---
+
+## 📞 Dukungan
+
+- **Issues (Masalah)**: [GitHub Issues](https://github.com/Brynnnn12/tools-hunting/issues)
+- **Diskusi**: [GitHub Discussions](https://github.com/Brynnnn12/tools-hunting/discussions)
+- **Dokumentasi**: README ini dan bantuan khusus alat
+- **Email**: Hubungi melalui GitHub
+
+---
+
+## 📅 Catatan Rilis
+
+### v1.0 (Siap Produksi)
+- ✅ Optimasi performa lengkap
+- ✅ Kompatibilitas cross-platform terjamin
+- ✅ CLI lengkap dengan bantuan built-in
+- ✅ Output JSON untuk automasi
+- ✅ Validasi keamanan yang ditingkatkan
+
+### v0.9 (Beta)
+- ✅ Konfigurasi berbasis .env
+- ✅ Pencatatan terpusat
+- ✅ Mode multi-enumeration
+
+---
+
+**Selamat Berburu! 🐛🔍**
+
+*Dibuat dengan ❤️ oleh BRYNNNN12*
