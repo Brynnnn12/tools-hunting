@@ -180,7 +180,7 @@ validate_target_dir() {
     return 0
 }
 
-show_banner() {
+print_banner() {
     printf '%b' "${RED}"
     cat << 'BANNER'
 ╔══════════════════════════════════════════════════════════╗
@@ -196,12 +196,17 @@ show_banner() {
 ╚══════════════════════════════════════════════════════════╝
 BANNER
     printf '%b' "${NC}"
+}
+
+show_banner() {
+    print_banner
     printf '%bDate: %s%b\n' "${CYAN}" "$(date)" "${NC}"
     printf '\n'
 }
 
 show_help() {
-    show_banner
+    print_banner
+    printf '\n'
     cat << 'HELP'
 PEMAKAIAN:
   target.sh [PERINTAH] [OPSI]
@@ -229,6 +234,26 @@ HELP
 
 show_version() {
     printf 'target.sh v%s\n' "$TOOL_VERSION"
+}
+
+# ============================================
+# PARSING FUNCTIONS
+# ============================================
+
+parse_global_options() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -f|--force)  FORCE_MODE=true; shift ;;
+            -s|--silent) SILENT_MODE=true; shift ;;
+            -h|--help)   show_help; exit 0 ;;
+            -v|--version) show_version; exit 0 ;;
+            -*)          error_msg "Unknown option: $1" ;;
+            *)           break ;;
+        esac
+    done
+
+    # Return remaining arguments
+    printf '%s\n' "$*"
 }
 
 # ============================================
@@ -529,26 +554,20 @@ list_targets() {
 # MAIN PROGRAM
 # ============================================
 
-parse_arguments() {
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            -f|--force)  FORCE_MODE=true; shift ;;
-            -s|--silent) SILENT_MODE=true; shift ;;
-            -h|--help)   show_help; exit 0 ;;
-            -v|--version) show_version; exit 0 ;;
-            -*)          error_msg "Unknown option: $1" ;;
-            *)           break ;;
-        esac
-    done
-
-    echo "$@"
-}
-
 main() {
     # Parse global options first
-    local remaining
-    remaining=$(parse_arguments "$@")
-    set -- $remaining
+    local remaining_args
+    remaining_args=$(parse_global_options "$@")
+
+    # Safety check: ensure remaining_args is not empty before setting
+    if [[ -z "$remaining_args" ]]; then
+        set --
+    else
+        # Safe word splitting using array
+        local -a args
+        read -r -a args <<< "$remaining_args"
+        set -- "${args[@]}"
+    fi
 
     setup_logging
 
@@ -561,14 +580,15 @@ main() {
     fi
 
     local command="$1"
-    shift || true
+    shift
 
     case "$command" in
         new)
-            [[ -z "${1:-}" ]] && error_msg "Domain required"
-            show_banner
+            [[ $# -eq 0 ]] && error_msg "Domain required for 'new' command"
+            print_banner
+            printf '\n'
 
-            local target="${1:-}"
+            local target="$1"
             target=$(sanitize_domain "$target")
             validate_domain "$target" || error_msg "Invalid domain: $target"
 
@@ -623,22 +643,23 @@ main() {
             ;;
 
         list)
-            show_banner
+            print_banner
+            printf '\n'
             list_targets
             ;;
 
         activate)
-            [[ -z "${1:-}" ]] && error_msg "Target name required"
+            [[ $# -eq 0 ]] && error_msg "Target name required for 'activate' command"
             activate_target "$1"
             ;;
 
         deactivate)
-            [[ -z "${1:-}" ]] && error_msg "Target name required"
+            [[ $# -eq 0 ]] && error_msg "Target name required for 'deactivate' command"
             deactivate_target "$1"
             ;;
 
         delete)
-            [[ -z "${1:-}" ]] && error_msg "Target name required"
+            [[ $# -eq 0 ]] && error_msg "Target name required for 'delete' command"
             delete_target "$1"
             ;;
 

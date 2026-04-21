@@ -383,7 +383,8 @@ run_live_check() {
     if command -v httpx &> /dev/null; then
         httpx -l "$combined_file" -sc -title -tech-detect -o "$live_file" -silent 2>/dev/null || warning_msg "Httpx failed"
     else
-        error_msg "httpx not found (required for live detection)"
+        warning_msg "httpx not found - skipping live detection"
+        touch "$live_file"
     fi
 
     local live_count
