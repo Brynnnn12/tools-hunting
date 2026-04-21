@@ -17,6 +17,22 @@
 # ============================================
 
 set -euo pipefail
+
+# Temp files untuk cleanup
+TEMP_FILES=()
+
+cleanup_tempfiles() {
+    local exit_code=$?
+    if [[ ${#TEMP_FILES[@]} -gt 0 ]]; then
+        for file in "${TEMP_FILES[@]}"; do
+            [[ -f "$file" ]] && rm -f "$file" 2>/dev/null || true
+        done
+    fi
+    return $exit_code
+}
+
+trap cleanup_tempfiles EXIT
+trap 'handle_trap_error "Interrupted" 130' INT TERM
 trap 'handle_trap_error "Error on line $LINENO" "$?"' ERR
 
 # ============================================
@@ -25,8 +41,19 @@ trap 'handle_trap_error "Error on line $LINENO" "$?"' ERR
 
 readonly SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly TOOL_VERSION="1.0"
-readonly START_TIME=$(date +%s%N)
+readonly TOOL_VERSION="1.1"
+
+# Cross-platform epoch time (macOS/Linux compatible)
+get_epoch() {
+    if date +%s%N &>/dev/null 2>&1 | grep -q '^[0-9]'; then
+        date +%s%N
+    elif date -f '%s' '+%s000000000' &>/dev/null 2>&1; then
+        date +%s000000000
+    else
+        printf '%d000000000' "$(date +%s)"
+    fi
+}
+readonly START_TIME=$(get_epoch)
 
 # Color codes
 readonly RED='\033[0;31m'
@@ -39,9 +66,10 @@ readonly WHITE='\033[1;37m'
 readonly GRAY='\033[0;90m'
 readonly NC='\033[0m'
 
-# Validation patterns
-readonly DOMAIN_REGEX='^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}$'
+# Validation patterns (improved)
+readonly DOMAIN_REGEX='^(?!-)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$'
 readonly NUMERIC_REGEX='^[0-9]+$'
+readonly RATE_REGEX='^[0-9]+(/[smh])?$'
 
 # ============================================
 # GLOBAL VARIABLES (from .env)
@@ -55,6 +83,7 @@ SCREENSHOTS_DIR=""
 REPORTS_DIR=""
 LOG_DIR=""
 RATE_LIMIT="50"
+WORDLIST_PATH="/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
 MODE="auto"
 JSON_OUTPUT="false"
 SILENT_MODE="false"
@@ -62,6 +91,7 @@ CHAOS_KEY=""
 
 # Internal
 LOG_FILE=""
+DNS_CACHE_FILE=""
 
 # ============================================
 # ERROR HANDLING & LOGGING
@@ -216,6 +246,7 @@ load_env() {
             REPORTS_DIR)     REPORTS_DIR="$value" ;;
             LOG_DIR)         LOG_DIR="$value" ;;
             RATE_LIMIT)      RATE_LIMIT="${value:-50}" ;;
+            WORDLIST_PATH)   WORDLIST_PATH="$value" ;;
             MODE)            MODE="${value:-auto}" ;;
             CHAOS_KEY)       CHAOS_KEY="$value" ;;
         esac
@@ -274,9 +305,9 @@ parse_arguments() {
         *) error_msg "Invalid MODE: $MODE (must be auto/passive/full)" ;;
     esac
     
-    # SECURE: Validate RATE_LIMIT is numeric
+    # SECURE: Validate RATE_LIMIT (numeric or with time unit)
     if [[ ! "$RATE_LIMIT" =~ $NUMERIC_REGEX ]]; then
-        error_msg "RATE_LIMIT must be numeric, got: $RATE_LIMIT"
+        error_msg "RATE_LIMIT must be numeric (e.g., 50 or 50/s), got: $RATE_LIMIT"
     fi
     
     # SECURE: Validate conflicting options
@@ -286,7 +317,7 @@ parse_arguments() {
 }
 
 show_help() {
-    printf '%bAlat Enumerasi Subdomain v%s%b\n' "${CYAN}" "$TOOL_VERSION" "${NC}"
+    printf '%bAlat Enumerasi Subdomain & Pengintaian v%s%b\n' "${CYAN}" "$TOOL_VERSION" "${NC}"
     printf '\n%bPEMAKAIAN:%b\n' "${GREEN}" "${NC}"
     printf '  %s [MODE] [OPSI]\n' "$SCRIPT_NAME"
     printf '\n%bMODE:%b\n' "${GREEN}" "${NC}"
@@ -425,10 +456,17 @@ run_active_enumeration() {
     local active_subdomains="${RECON_DIR}/active_subdomains.txt"
     > "$active_subdomains" || error_msg "Cannot create active_subdomains.txt"
 
-    # Shuffledns (brute force)
+    # Verify wordlist exists
+    if [[ ! -f "$WORDLIST_PATH" ]]; then
+        warning_msg "Wordlist not found at: $WORDLIST_PATH"
+        warning_msg "Skipping active enumeration"
+        return 0
+    fi
+
+    # Shuffledns (brute force) with rate limiting
     if command -v shuffledns &> /dev/null; then
-        info_msg "Running shuffledns with rate limit $RATE_LIMIT (this may take a while)..."
-        shuffledns -d "$TARGET" -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -rate "$RATE_LIMIT" -silent 2>/dev/null >> "$active_subdomains" || warning_msg "Shuffledns failed or returned no results"
+        info_msg "Running shuffledns with rate limit $RATE_LIMIT/s (this may take a while)..."
+        shuffledns -d "$TARGET" -w "$WORDLIST_PATH" -rate "$RATE_LIMIT" -silent 2>/dev/null >> "$active_subdomains" || warning_msg "Shuffledns failed or returned no results"
         info_msg "Shuffledns completed"
     else
         warning_msg "shuffledns not found - skipping active enumeration"
@@ -451,9 +489,10 @@ run_active_enumeration() {
 # ============================================
 
 run_live_check() {
-    step_msg "Running live detection..."
+    step_msg "Running live detection (optimized: DNS resolution + HTTP probe)..."
 
     local combined_file="${RECON_DIR}/all_subdomains.txt"
+    local resolved_file="${RECON_DIR}/resolved_subdomains.txt"
     local live_file="${RECON_DIR}/live_subdomains.txt"
 
     # Combine all subdomains
@@ -462,16 +501,44 @@ run_live_check() {
 
     local combined_count
     combined_count=$(safe_wc "$combined_file")
-    info_msg "Testing $combined_count combined subdomains for live hosts..."
-
-    # Httpx
-    if command -v httpx &> /dev/null; then
-        info_msg "Running httpx (this may take a while)..."
-        httpx -l "$combined_file" -sc -title -tech-detect -o "$live_file" -silent 2>/dev/null || warning_msg "Httpx failed"
-        info_msg "Httpx completed"
-    else
-        warning_msg "httpx not found - skipping live detection"
+    
+    if [[ $combined_count -eq 0 ]]; then
+        info_msg "No subdomains to test"
         touch "$live_file"
+        echo "0"
+        return 0
+    fi
+    
+    info_msg "Testing $combined_count subdomains for live hosts..."
+
+    # Stage 1: DNS Resolution (dnsx)
+    if command -v dnsx &> /dev/null; then
+        info_msg "Stage 1/2: Running DNS resolution (dnsx)..."
+        dnsx -l "$combined_file" -o "$resolved_file" -silent 2>/dev/null || warning_msg "DNS resolution had issues"
+        
+        local resolved_count
+        resolved_count=$(safe_wc "$resolved_file")
+        info_msg "Resolved: $resolved_count live DNS entries"
+        
+        # Stage 2: HTTP Probing (httpx only on resolved domains)
+        if command -v httpx &> /dev/null && [[ $resolved_count -gt 0 ]]; then
+            info_msg "Stage 2/2: Running HTTP probe (httpx)..."
+            httpx -l "$resolved_file" -sc -title -o "$live_file" -silent 2>/dev/null || warning_msg "HTTP probing had issues"
+            info_msg "HTTP probing completed"
+        else
+            [[ $resolved_count -gt 0 ]] && warning_msg "httpx not found - cannot probe resolved domains" || true
+            touch "$live_file"
+        fi
+    else
+        warning_msg "dnsx not found - falling back to httpx direct probing"
+        if command -v httpx &> /dev/null; then
+            info_msg "Running httpx (this may take a while)..."
+            httpx -l "$combined_file" -sc -title -o "$live_file" -silent 2>/dev/null || warning_msg "Httpx failed"
+            info_msg "Httpx completed"
+        else
+            warning_msg "httpx not found - skipping live detection"
+            touch "$live_file"
+        fi
     fi
 
     local live_count
@@ -502,7 +569,6 @@ main_recon() {
     case "$MODE" in
         passive)
             info_msg "Mode: PASSIVE ONLY"
-            mkdir -p "${RECON_DIR}/active"
             touch "${RECON_DIR}/active_subdomains.txt"
             ;;
         full|active)
@@ -515,7 +581,6 @@ main_recon() {
                 run_active_enumeration 2>&1 | grep -v '^$' >&2 || true
             else
                 info_msg "Passive results ($passive_count) >= threshold (50), skipping active"
-                mkdir -p "${RECON_DIR}/active"
                 touch "${RECON_DIR}/active_subdomains.txt"
             fi
             ;;
@@ -544,7 +609,9 @@ output_json_results() {
     local active_count=$(safe_wc "$active")
     local live_count=$(safe_wc "$live")
 
-    local elapsed=$(($(date +%s%N) - START_TIME))
+    local current_epoch
+    current_epoch=$(get_epoch)
+    local elapsed=$((current_epoch - START_TIME))
 
     printf '{\n'
     printf '  "target": "%s",\n' "$TARGET"
