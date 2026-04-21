@@ -180,7 +180,7 @@ validate_target_dir() {
     return 0
 }
 
-print_banner() {
+show_banner() {
     printf '%b' "${RED}"
     cat << 'BANNER'
 ╔══════════════════════════════════════════════════════════╗
@@ -196,17 +196,12 @@ print_banner() {
 ╚══════════════════════════════════════════════════════════╝
 BANNER
     printf '%b' "${NC}"
-}
-
-show_banner() {
-    print_banner
     printf '%bDate: %s%b\n' "${CYAN}" "$(date)" "${NC}"
     printf '\n'
 }
 
 show_help() {
-    print_banner
-    printf '\n'
+    show_banner
     cat << 'HELP'
 PEMAKAIAN:
   target.sh [PERINTAH] [OPSI]
@@ -234,26 +229,6 @@ HELP
 
 show_version() {
     printf 'target.sh v%s\n' "$TOOL_VERSION"
-}
-
-# ============================================
-# PARSING FUNCTIONS
-# ============================================
-
-parse_global_options() {
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            -f|--force)  FORCE_MODE=true; shift ;;
-            -s|--silent) SILENT_MODE=true; shift ;;
-            -h|--help)   show_help; exit 0 ;;
-            -v|--version) show_version; exit 0 ;;
-            -*)          error_msg "Unknown option: $1" ;;
-            *)           break ;;
-        esac
-    done
-
-    # Return remaining arguments
-    printf '%s\n' "$*"
 }
 
 # ============================================
@@ -371,7 +346,7 @@ create_notes_file() {
 
 📝 IMPORTANT
 ═══════════════════════════════════════════════════════════════════
-  ✏️  Document findings
+  ✏  Document findings
   📸  Save screenshots
   🔐  Never commit API keys
   💾  Backup results
@@ -554,20 +529,26 @@ list_targets() {
 # MAIN PROGRAM
 # ============================================
 
+parse_arguments() {
+    local args=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -f|--force)  FORCE_MODE=true; shift ;;
+            -s|--silent) SILENT_MODE=true; shift ;;
+            -h|--help)   show_help; exit 0 ;;
+            -v|--version) show_version; exit 0 ;;
+            -*)          error_msg "Unknown option: $1" ;;
+            *)           args+=("$1"); shift ;;
+        esac
+    done
+    echo "${args[@]}"
+}
+
 main() {
     # Parse global options first
-    local remaining_args
-    remaining_args=$(parse_global_options "$@")
-
-    # Safety check: ensure remaining_args is not empty before setting
-    if [[ -z "$remaining_args" ]]; then
-        set --
-    else
-        # Safe word splitting using array
-        local -a args
-        read -r -a args <<< "$remaining_args"
-        set -- "${args[@]}"
-    fi
+    local -a remaining
+    read -ra remaining <<< "$(parse_arguments "$@")"
+    set -- "${remaining[@]}"
 
     setup_logging
 
@@ -578,17 +559,15 @@ main() {
         printf '\nRun with --help for more information\n'
         exit 1
     fi
-
     local command="$1"
-    shift
+    shift || true
 
     case "$command" in
         new)
-            [[ $# -eq 0 ]] && error_msg "Domain required for 'new' command"
-            print_banner
-            printf '\n'
+            [[ -z "${1:-}" ]] && error_msg "Domain required"
+            show_banner
 
-            local target="$1"
+            local target="${1:-}"
             target=$(sanitize_domain "$target")
             validate_domain "$target" || error_msg "Invalid domain: $target"
 
@@ -643,23 +622,22 @@ main() {
             ;;
 
         list)
-            print_banner
-            printf '\n'
+            show_banner
             list_targets
             ;;
 
         activate)
-            [[ $# -eq 0 ]] && error_msg "Target name required for 'activate' command"
+            [[ -z "${1:-}" ]] && error_msg "Target name required"
             activate_target "$1"
             ;;
 
         deactivate)
-            [[ $# -eq 0 ]] && error_msg "Target name required for 'deactivate' command"
+            [[ -z "${1:-}" ]] && error_msg "Target name required"
             deactivate_target "$1"
             ;;
 
         delete)
-            [[ $# -eq 0 ]] && error_msg "Target name required for 'delete' command"
+            [[ -z "${1:-}" ]] && error_msg "Target name required"
             delete_target "$1"
             ;;
 
@@ -670,3 +648,4 @@ main() {
 }
 
 main "$@"
+
