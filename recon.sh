@@ -2,7 +2,7 @@
 
 # ============================================
 # Alat Enumerasi Subdomain & Pengintaian v1.0
-# Penulis: BRYNNNN12 | Siap Produksi | Tersinkronisasi dengan target.sh v1.0
+# Penulis: BRYNNNN12
 # ============================================
 # FITUR:
 #   - Pemuatan .env ketat dengan parsing variabel whitelist
@@ -123,14 +123,16 @@ setup_logging() {
 load_env() {
     # Determine BASE_DIR - try multiple locations with strict precedence
     local env_file=""
+    local env_dir=""
 
     if [[ -n "${BASE_DIR:-}" && -f "${BASE_DIR}/.env" ]]; then
         env_file="${BASE_DIR}/.env"
+        env_dir="$BASE_DIR"
     elif [[ -f ".env" ]]; then
-        BASE_DIR="$(pwd)"
+        env_dir="$(pwd)"
         env_file="./.env"
     elif [[ -f "../.env" ]]; then
-        BASE_DIR="$(cd .. && pwd)"
+        env_dir="$(cd .. && pwd)"
         env_file="../.env"
     else
         error_msg "Cannot find .env file (checked: ./.env, ../.env, \${BASE_DIR}/.env)"
@@ -154,6 +156,12 @@ load_env() {
         value="${value## }"
         value="${value%% }"
 
+        # Remove quotes if present
+        value="${value%\"}"
+        value="${value#\"}"
+        value="${value%\'}"
+        value="${value#\'}"
+
         # Remove 'export ' prefix if present
         key="${key#export }"
 
@@ -176,7 +184,26 @@ load_env() {
     # Verify required variables
     [[ -z "$TARGET" ]] && error_msg "TARGET not set in .env"
     [[ -z "$BASE_DIR" ]] && error_msg "BASE_DIR not set in .env"
-    [[ ! -d "$BASE_DIR" ]] && error_msg "BASE_DIR does not exist: $BASE_DIR"
+
+    # Clean TARGET: strip protocol, path, port, www prefix, and quotes
+    TARGET="${TARGET#*://}"           # Remove http://, https://, etc.
+    TARGET="${TARGET%%/*}"             # Remove path after domain
+    TARGET="${TARGET%%:*}"             # Remove port
+    TARGET="${TARGET#www.}"            # Remove www. prefix
+    TARGET="${TARGET%\"}"              # Remove trailing quote
+    TARGET="${TARGET#\"}"              # Remove leading quote
+    TARGET="${TARGET%\'}"              # Remove trailing single quote
+    TARGET="${TARGET#\'}"              # Remove leading single quote
+    
+    # Trim whitespace and convert to lowercase using sed/tr
+    TARGET=$(printf '%s' "$TARGET" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+
+    # If BASE_DIR doesn't exist, use the .env file's directory as fallback
+    if [[ ! -d "$BASE_DIR" ]]; then
+        warning_msg "BASE_DIR from .env not found: $BASE_DIR"
+        warning_msg "Using .env directory as BASE_DIR instead"
+        BASE_DIR="$env_dir"
+    fi
 
     # Expand ${BASE_DIR} in paths
     RECON_DIR="${RECON_DIR/\$\{BASE_DIR\}/$BASE_DIR}"
@@ -205,7 +232,8 @@ parse_arguments() {
             -h|--help)      show_help; exit 0 ;;
             -v|--version)   show_version; exit 0 ;;
             -*)             error_msg "Unknown option: $1" ;;
-            *)              break ;;
+            auto|passive|full)  MODE="$1"; shift ;;
+            *)              error_msg "Unknown argument: $1" ;;
         esac
     done
 }
@@ -213,7 +241,11 @@ parse_arguments() {
 show_help() {
     printf '%bAlat Enumerasi Subdomain v%s%b\n' "${CYAN}" "$TOOL_VERSION" "${NC}"
     printf '\n%bPEMAKAIAN:%b\n' "${GREEN}" "${NC}"
-    printf '  %s [OPSI]\n' "$SCRIPT_NAME"
+    printf '  %s [MODE] [OPSI]\n' "$SCRIPT_NAME"
+    printf '\n%bMODE:%b\n' "${GREEN}" "${NC}"
+    printf '  auto               Pasif jika <50 hasil, jika tidak full enumeration (default)\n'
+    printf '  passive            Hanya enumerasi pasif\n'
+    printf '  full               Enumerasi penuh termasuk brute force\n'
     printf '\n%bOPSI:%b\n' "${GREEN}" "${NC}"
     printf '  --json             Output hasil dalam format JSON\n'
     printf '  --mode MODE        Pilih mode: auto/passive/full (default: auto)\n'
@@ -221,11 +253,6 @@ show_help() {
     printf '  --silent           Tanpa output berwarna\n'
     printf '  -h, --help         Tampilkan pesan bantuan ini\n'
     printf '  -v, --version      Tampilkan versi\n'
-    printf '\n%bDESKRIPSI MODE:%b\n' "${GREEN}" "${NC}"
-    printf '  auto               Pasif jika <50 hasil, jika tidak full enumeration\n'
-    printf '  passive            Hanya enumerasi pasif\n'
-    printf '  full               Enumerasi penuh termasuk brute force\n'
-
 }
 show_version() {
     printf '%s v%s\n' "$SCRIPT_NAME" "$TOOL_VERSION"
@@ -237,7 +264,17 @@ show_version() {
 
 validate_domain() {
     local domain="$1"
-    if [[ ! "$domain" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+    
+    # Strip protocol and paths
+    domain="${domain#*://}"           # Remove http://, https://, etc.
+    domain="${domain%%/*}"             # Remove path after domain
+    domain="${domain%%:*}"             # Remove port
+    domain="${domain#www.}"            # Remove www. prefix (optional)
+    
+    # Trim whitespace using sed and convert to lowercase
+    domain=$(printf '%s' "$domain" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+    
+    if [[ ! "$domain" =~ ^[a-z0-9.-]+\.[a-z]{2,}$ ]]; then
         return 1
     fi
     return 0
