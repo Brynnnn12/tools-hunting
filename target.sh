@@ -541,13 +541,17 @@ parse_arguments() {
             *)           args+=("$1"); shift ;;
         esac
     done
-    echo "${args[@]}"
+    # Return arguments as array elements, not as a string
+    printf '%s\n' "${args[@]}"
 }
 
 main() {
-    # Parse global options first
-    local -a remaining
-    read -ra remaining <<< "$(parse_arguments "$@")"
+    # Parse global options first - handle array properly
+    local -a remaining=()
+    while IFS= read -r arg; do
+        remaining+=("$arg")
+    done < <(parse_arguments "$@")
+    
     set -- "${remaining[@]}"
 
     setup_logging
